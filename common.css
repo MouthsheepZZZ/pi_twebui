@@ -52,8 +52,8 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.7 var(
 
 button { font: inherit; color: inherit; }
 .icon-btn {
-  display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 28px; padding: 0 8px;
-  border: 0; border-radius: 8px; background: transparent; color: var(--text-2); cursor: pointer; font-size: 12.5px;
+  display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0;
+  border: 0; border-radius: 8px; background: transparent; color: var(--text-2); cursor: pointer;
 }
 .icon-btn:hover { background: var(--surface-2); color: var(--text); }
 .icon-btn:disabled { opacity: .35; cursor: default; background: transparent; }

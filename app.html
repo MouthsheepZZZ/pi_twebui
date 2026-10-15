@@ -13,14 +13,25 @@
   /* ---------- Main column ---------- */
   main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
   header {
-    flex: none; display: flex; align-items: center; gap: 8px; height: 48px; padding: 0 12px;
+    position: relative; flex: none; display: flex; align-items: center; height: 48px; padding: 0;
     border-bottom: 1px solid var(--border); background: var(--bg);
+  }
+  header .pin {
+    position: absolute; left: 8px; top: 50%; transform: translateY(-50%); z-index: 1;
+    width: 32px; height: 32px;
   }
   .dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 18%, transparent); }
   .dot.busy { background: var(--warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 18%, transparent); animation: pulse 1.2s infinite; }
   .dot.offline { background: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 18%, transparent); }
   @keyframes pulse { 50% { opacity: .35; } }
-  header .title { min-width: 0; color: var(--text); font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* Same column as the thread and composer, so the status dot lines up with their left edge. */
+  header .titlebar {
+    box-sizing: border-box; display: flex; align-items: center; gap: 10px;
+    width: min(820px, 100%); margin: 0 auto; min-width: 0;
+    padding: 0 24px 0 max(0px, 44px - max(0px, (100vw - 820px) / 2));
+  }
+  header .title { flex: 0 1 auto; min-width: 0; color: var(--text); font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  header .pin.on { color: var(--accent); background: color-mix(in srgb, var(--accent) 18%, transparent); }
   .banner { flex: none; display: none; padding: 7px 16px; font-size: 13px; text-align: center; background: color-mix(in srgb, var(--warn) 16%, var(--bg)); color: var(--warn); }
   .banner.show { display: block; }
   .banner.error { background: color-mix(in srgb, var(--danger) 16%, var(--bg)); color: var(--danger); }
@@ -55,14 +66,15 @@
   }
   .user-images { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-bottom: 8px; }
   .user-images img { max-width: 200px; max-height: 160px; border-radius: 10px; border: 1px solid var(--border); cursor: zoom-in; }
-  .turn-assistant { position: relative; margin: 0 0 6px; }
+  .turn-assistant { position: relative; margin: 0 0 6px; --tool-icon: 22px; }
   .turn-assistant.has-reply { padding-bottom: 34px; }
-  .turn-assistant .reply { font-size: 15px; }
+  /* Chevron is 14px and the summary gap is 8px, so reply text lines up with the tool icon. */
+  .turn-assistant .reply { font-size: 15px; padding-left: var(--tool-icon); }
   .turn-assistant.focus .reply { animation: flash 1.4s ease-out; border-radius: 8px; }
   @keyframes flash { from { background: color-mix(in srgb, var(--accent) 12%, transparent); } to { background: transparent; } }
-  .reply-actions { position: absolute; left: -6px; bottom: 2px; display: flex; gap: 2px; opacity: 0; transition: opacity .15s; }
+  .reply-actions { position: absolute; left: calc(var(--tool-icon) - 6px); bottom: 2px; display: flex; gap: 2px; opacity: 0; transition: opacity .15s; }
   .turn-assistant:hover .reply-actions, .turn-assistant.focus .reply-actions { opacity: 1; }
-  .note { margin: 8px 0; padding: 8px 12px; border-radius: 10px; font-size: 13px; white-space: pre-wrap; }
+  .note { margin: 8px 0 8px var(--tool-icon); padding: 8px 12px; border-radius: 10px; font-size: 13px; white-space: pre-wrap; }
   .note.error { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); }
   .note.muted { color: var(--muted); padding: 0; }
 
@@ -257,8 +269,11 @@
 <body>
 <main>
   <header>
-    <span class="dot" id="dot"></span>
-    <span class="title" id="title"></span>
+    <button class="icon-btn pin" id="pin" type="button" title="Keep this window in front" aria-label="Keep this window in front" aria-pressed="false"></button>
+    <div class="titlebar">
+      <span class="dot" id="dot"></span>
+      <span class="title" id="title"></span>
+    </div>
   </header>
   <div class="banner" id="banner"></div>
 
@@ -278,7 +293,6 @@
       <div class="attachments" id="attachments"></div>
       <textarea id="input" rows="1" spellcheck="false"></textarea>
       <div class="composer-bar">
-        <button class="icon-btn" id="fill" title="Put the text into the Pi terminal editor (Ctrl+Shift+Enter)"></button>
         <div class="spacer"></div>
         <button class="send" id="send"></button>
       </div>
@@ -310,6 +324,7 @@ const liveEl = $("live");
 const input = $("input");
 const composer = $("composer");
 const DRAFT_KEY = "pi-compose-draft";
+const TOPMOST_KEY = "pi-twebui-topmost";
 const TOKEN = new URLSearchParams(location.search).get("token");
 
 
@@ -508,9 +523,9 @@ function renderDiff(tool) {
   const { diff } = tool;
   const box = document.createElement("div");
   box.className = "diff-block";
-  box.innerHTML = `<div class="block-head"><span class="lang"></span>` +
-    `<button class="icon-btn" data-action="args" title="Show raw arguments">${ICONS.code}<span>Args</span></button>` +
-    `<button class="icon-btn" data-action="copy" title="Copy the changed text">${ICONS.copy}<span>Copy</span></button></div>` +
+    box.innerHTML = `<div class="block-head"><span class="lang"></span>` +
+    `<button class="icon-btn" data-action="args" title="Show raw arguments" aria-label="Show raw arguments">${ICONS.code}</button>` +
+    `<button class="icon-btn" data-action="copy" title="Copy the changed text" aria-label="Copy the changed text">${ICONS.copy}</button></div>` +
     `<pre class="diff"></pre><pre class="diff-args" hidden></pre>`;
   box.querySelector(".lang").textContent = diff.path || tool.name;
   const pre = box.querySelector(".diff");
@@ -547,22 +562,53 @@ function applyRunningTools() {
   }
 }
 
-async function renderAssistant(item, { live = false } = {}) {
+function copyActions(item) {
+  const actions = document.createElement("div");
+  actions.className = "reply-actions";
+  actions.innerHTML = `<button class="icon-btn" title="Copy the conclusion" aria-label="Copy the conclusion">${ICONS.copy}</button>`;
+  actions.querySelector("button").onclick = () => copyText(item.text, "Copied conclusion");
+  return actions;
+}
+
+// One copy button per user turn, on the final answer only. Text that shares a message
+// with tool calls, or that is followed by later tool calls, is the narration between them.
+function conclusionFlags(items, streamingItem) {
+  const all = streamingItem ? [...items, streamingItem] : items;
+  const flags = items.map(() => false);
+  let start = 0;
+  const mark = (end) => {
+    let seenTools = false;
+    for (let i = end - 1; i >= start; i--) {
+      const it = all[i];
+      if (it.kind !== "assistant") continue;
+      if (it.tools.length) seenTools = true;
+      else if (!seenTools && it.text) {
+        if (i < items.length) flags[i] = true;
+        break;
+      }
+    }
+  };
+  for (let i = 0; i <= all.length; i++) {
+    if (i === all.length || all[i].kind === "user") {
+      mark(i);
+      start = i + 1;
+    }
+  }
+  return flags;
+}
+
+async function renderAssistant(item, { live = false, conclusion = false } = {}) {
   const el = document.createElement("div");
   el.className = "turn-assistant";
   el.appendChild(renderSteps(item));
   if (item.text) {
-    el.classList.add("has-reply");
     const reply = document.createElement("div");
     reply.className = "reply";
     el.appendChild(reply);
     await renderMarkdown(reply, item.text, { diagrams: !live });
-    if (!live) {
-      const actions = document.createElement("div");
-      actions.className = "reply-actions";
-      actions.innerHTML = `<button class="icon-btn" title="Copy the whole reply as Markdown">${ICONS.copy}<span>Copy</span></button>`;
-      actions.querySelector("button").onclick = () => copyText(item.text, "Copied reply");
-      el.appendChild(actions);
+    if (conclusion && !live) {
+      el.classList.add("has-reply");
+      el.appendChild(copyActions(item));
     }
   }
   if (item.error) el.insertAdjacentHTML("beforeend", `<div class="note error">${escapeHtml(item.error)}</div>`);
@@ -573,12 +619,21 @@ async function renderAssistant(item, { live = false } = {}) {
 function renderUser(item) {
   const el = document.createElement("div");
   el.className = "turn-user";
-  if (item.images.length) {
+  const paths = item.imagePaths ?? [];
+  if (item.images.length || paths.length) {
     const imgs = document.createElement("div");
     imgs.className = "user-images";
     for (const img of item.images) {
       const tag = document.createElement("img");
       tag.src = `data:${img.mimeType};base64,${img.data}`;
+      tag.onclick = () => zoom(tag.src);
+      imgs.appendChild(tag);
+    }
+    // Paths stay in the message text. These tags only display the files the terminal already stored.
+    for (const path of paths) {
+      const tag = document.createElement("img");
+      tag.alt = path;
+      tag.src = `/api/local-image?${new URLSearchParams({ path, token: TOKEN })}`;
       tag.onclick = () => zoom(tag.src);
       imgs.appendChild(tag);
     }
@@ -594,12 +649,12 @@ function renderUser(item) {
 
 }
 
-async function renderItem(item) {
+async function renderItem(item, { conclusion = false } = {}) {
   switch (item.kind) {
     case "user":
       return renderUser(item);
     case "assistant":
-      return renderAssistant(item);
+      return renderAssistant(item, { conclusion });
     case "bash": {
       const el = document.createElement("div");
       el.className = "card";
@@ -632,15 +687,17 @@ async function renderItem(item) {
 // Re-render only from the first item whose key changed, so long threads stay cheap.
 async function syncThread() {
   const items = await api("/api/thread");
+  const flags = conclusionFlags(items, streaming);
   const keepBottom = atBottom();
   let same = 0;
-  while (same < rendered.length && same < items.length && rendered[same].key === items[same].key) same++;
+  while (same < rendered.length && same < items.length && rendered[same].key === items[same].key && !!rendered[same].conclusion === flags[same]) same++;
   for (const r of rendered.splice(same)) r.el.remove();
   threadEl.querySelector(".empty")?.remove();
-  for (const item of items.slice(same)) {
-    const el = await renderItem(item);
+  for (const [offset, item] of items.slice(same).entries()) {
+    const conclusion = flags[same + offset];
+    const el = await renderItem(item, { conclusion });
     threadEl.appendChild(el);
-    rendered.push({ key: item.key, el, item });
+    rendered.push({ key: item.key, el, item, conclusion });
   }
   if (items.length === 0) {
     threadEl.innerHTML = '<div class="empty"><h2>Start a conversation</h2>Type / for commands, @ for files</div>';
@@ -671,12 +728,15 @@ function requestSync() {
 let liveItem = null;
 let liveEnded = false;
 let liveDrawing = false;
+let streaming = null;
 async function drawLive() {
   if (liveDrawing) return;
   liveDrawing = true;
   while (liveItem) {
     const item = liveItem;
+    streaming = item;
     liveItem = null;
+    applyConclusionButtons();
     const keepBottom = atBottom();
     const el = await renderAssistant(item, { live: true });
     // Keep the user's open/closed choice on steps while the message streams.
@@ -687,6 +747,19 @@ async function drawLive() {
     if (keepBottom) scrollToBottom();
   }
   liveDrawing = false;
+}
+
+// A streaming message can turn the open turn's previous text into narration between tools.
+function applyConclusionButtons() {
+  const items = rendered.map((row) => row.item);
+  const flags = conclusionFlags(items, streaming);
+  rendered.forEach((row, i) => {
+    if (row.item.kind !== "assistant" || !!row.conclusion === flags[i]) return;
+    row.conclusion = flags[i];
+    row.el.classList.toggle("has-reply", flags[i]);
+    row.el.querySelector(".reply-actions")?.remove();
+    if (flags[i]) row.el.appendChild(copyActions(row.item));
+  });
 }
 
 /* ---------- Header and state ---------- */
@@ -772,6 +845,34 @@ function pageTitle() {
   if (chrome.title) return chrome.title;
   if (state.sessionName) return `${state.sessionName} · Pi TWebui`;
   return "Pi TWebui";
+}
+
+function renderPin() {
+  const on = localStorage.getItem(TOPMOST_KEY) === "1";
+  const pin = $("pin");
+  pin.classList.toggle("on", on);
+  pin.setAttribute("aria-pressed", on ? "true" : "false");
+  const label = on ? "Stop keeping this window in front" : "Keep this window in front";
+  pin.title = label;
+  pin.setAttribute("aria-label", label);
+  pin.innerHTML = ICONS.pin;
+}
+
+// Windows z-order is not available to the page, so Pi pins the Chrome window for us.
+async function setAlwaysOnTop(enabled, { quiet = false } = {}) {
+  const pin = $("pin");
+  pin.disabled = true;
+  try {
+    await api("/api/always-on-top", { enabled, title: document.title, host: location.host });
+    localStorage.setItem(TOPMOST_KEY, enabled ? "1" : "0");
+    renderPin();
+    if (!quiet) toast(enabled ? "Window stays in front" : "Window no longer stays in front");
+  } catch (error) {
+    renderPin();
+    toast(error.message, true);
+  } finally {
+    pin.disabled = false;
+  }
 }
 
 function renderState() {
@@ -974,11 +1075,54 @@ function copyLastReply() {
   const selection = String(window.getSelection());
   if (selection) return copyText(selection, "Copied selection");
   const text = lastReplyText();
-  text ? copyText(text, "Copied last reply") : toast("No reply yet", true);
+  text ? copyText(text, "Copied conclusion") : toast("No conclusion yet", true);
 }
 
 function lastReplyText() {
-  return [...rendered].reverse().find((r) => r.item.kind === "assistant" && r.item.text)?.item.text;
+  const items = rendered.map((r) => r.item);
+  const flags = conclusionFlags(items, streaming);
+  for (let i = flags.length - 1; i >= 0; i--) if (flags[i]) return items[i].text;
+}
+
+// The reply aligned with the top of the thread, or the last one that starts above it.
+function currentReplyIndex(nodes) {
+  const origin = scroller.getBoundingClientRect().top + 12;
+  let index = 0;
+  nodes.forEach((el, i) => {
+    if (el.getBoundingClientRect().top <= origin + 8) index = i;
+  });
+  return index;
+}
+
+let replyFlash;
+let replyCursorEl = null;
+let replyJumping = false;
+scroller.addEventListener("scroll", () => {
+  if (!replyJumping) replyCursorEl = null;
+});
+
+function jumpReply(direction) {
+  const nodes = [...document.querySelectorAll("#thread .reply, #live .reply")];
+  if (!nodes.length) return toast("No replies yet", true);
+  const origin = scroller.getBoundingClientRect().top + 12;
+  const cursor = nodes.indexOf(replyCursorEl);
+  // A reply near the end cannot be pinned to the top. Keep stepping from that one.
+  const from = cursor !== -1 && replyCursorEl.getBoundingClientRect().top > origin + 8
+    ? cursor
+    : currentReplyIndex(nodes);
+  const index = from + direction;
+  if (index < 0) return toast("Already at the first reply");
+  if (index >= nodes.length) return toast("Already at the last reply");
+  const target = nodes[index];
+  const turn = target.closest(".turn-assistant");
+  document.querySelectorAll(".turn-assistant.focus").forEach((el) => el.classList.remove("focus"));
+  turn?.classList.add("focus");
+  clearTimeout(replyFlash);
+  replyFlash = setTimeout(() => turn?.classList.remove("focus"), 1400);
+  replyJumping = true;
+  scroller.scrollTop += target.getBoundingClientRect().top - origin;
+  replyJumping = false;
+  replyCursorEl = target.getBoundingClientRect().top > origin + 8 ? target : null;
 }
 
 function showSessionInfo() {
@@ -1028,11 +1172,11 @@ function showHotkeys() {
     ["Cut / copy / paste in the editor", "Ctrl+X / Ctrl+C / Ctrl+V"],
     ["Cycle thinking level", keysOf("app.thinking.cycle")],
     ["Select model", keysOf("app.model.select")],
-    ["Copy selection / last reply", keysOf("app.message.copy")],
+    ["Copy selection / conclusion", keysOf("app.message.copy")],
+    ["Previous / next reply", [keysOf("tui.altScreen.previousPrompt"), keysOf("tui.altScreen.nextPrompt")].filter(Boolean).join("  · next ")],
     ["Cycle model", [keysOf("app.model.cycleForward"), keysOf("app.model.cycleBackward")].filter(Boolean).join("  · backward ")],
     ["Expand / collapse tool output", keysOf("app.tools.expand")],
     ["Show / hide thinking", keysOf("app.thinking.toggle")],
-    ["Put text into Pi terminal editor", "Ctrl+Shift+Enter"],
     ["New session / tree / fork / resume", ["app.session.new", "app.session.tree", "app.session.fork", "app.session.resume"].map((id) => keysOf(id) || "—").join(" / ")],
   ];
   modal({
@@ -1060,7 +1204,7 @@ const BUILTINS = [
   { name: "tree", description: "Navigate the session tree", run: openTree },
   { name: "fork", description: "Create a new fork from a previous user message", run: openFork },
   { name: "resume", description: "Resume a different session", run: openResume },
-  { name: "copy", description: "Copy the last assistant message", run: () => { const t = lastReplyText(); t ? copyText(t, "Copied") : toast("No reply yet", true); } },
+  { name: "copy", description: "Copy the conclusion of the last turn", run: () => { const t = lastReplyText(); t ? copyText(t, "Copied conclusion") : toast("No conclusion yet", true); } },
   { name: "hotkeys", description: "Show keyboard shortcuts", run: showHotkeys },
   { name: "reload", description: "Reload keybindings, extensions, skills, prompts, and themes", run: () => action({ type: "reload" }, "Reloaded") },
   { name: "quit", description: "Quit Pi", run: () => action({ type: "quit" }) },
@@ -1120,6 +1264,7 @@ function previewCompletion() {
   localStorage.setItem(DRAFT_KEY, input.value);
   autoGrow();
   updateSendButton();
+  syncEditor();
 }
 let fileQuery = 0;
 async function updateCompletion() {
@@ -1178,6 +1323,57 @@ function updateComposerBorder() {
   composer.style.setProperty("--edge", state.theme.colors[token] ?? "");
 }
 
+let applyingEditor = false;
+let editorSync = true;
+let editorDirty = false;
+let editorFlight = null;
+let editorQueued = null;
+
+function syncEditor() {
+  if (!editorSync || applyingEditor) return;
+  if (!connected) {
+    editorDirty = true;
+    return;
+  }
+  editorDirty = false;
+  editorQueued = input.value;
+  if (editorFlight !== null) return;
+  void pumpEditor();
+}
+
+async function pumpEditor() {
+  while (editorSync && editorQueued !== null) {
+    const text = editorQueued;
+    editorQueued = null;
+    editorFlight = text;
+    try {
+      const result = await api("/api/editor", { text });
+      if (editorQueued === null && input.value === text && result.text !== text) applyRemoteEditor(result.text);
+    } catch (error) {
+      editorQueued = null;
+      if (String(error.message).includes("Not found")) editorSync = false;
+    } finally {
+      editorFlight = null;
+    }
+  }
+}
+
+// Terminal typing has no cursor in the extension API, so keep the web caret when it was at the end.
+function applyRemoteEditor(text) {
+  if (!editorSync || editorQueued !== null || editorFlight !== null || input.value === text) return;
+  const start = input.selectionStart;
+  const end = input.selectionEnd;
+  const atEnd = document.activeElement === input && start === end && end === input.value.length;
+  applyingEditor = true;
+  input.value = text;
+  if (document.activeElement === input) {
+    const next = atEnd ? text.length : Math.min(start, text.length);
+    input.setSelectionRange(next, atEnd ? text.length : Math.min(end, text.length));
+  }
+  onInput();
+  applyingEditor = false;
+}
+
 function onInput() {
   updateComposerBorder();
   localStorage.setItem(DRAFT_KEY, input.value);
@@ -1185,6 +1381,7 @@ function onInput() {
   updateSendButton();
   renderAttachments();
   updateCompletion().catch(() => closeCompletion());
+  syncEditor();
 }
 
 function readAsBase64(file) {
@@ -1250,15 +1447,11 @@ function clearComposer() {
 }
 
 // deliverAs applies while Pi is running: Enter steers, Pi's follow-up key queues for after the run.
-async function submit(kind, deliverAs = "steer") {
+async function submit(deliverAs = "steer") {
   const text = input.value.trim();
-  if (kind === "fill") {
-    if (!text) return toast("Nothing to send", true);
-  } else if (!text) {
-    return;
-  }
+  if (!text) return;
 
-  if (kind === "send" && text.startsWith("/")) {
+  if (text.startsWith("/")) {
     const [, name, args] = /^\/(\S+)\s*([\s\S]*)$/.exec(text);
     const builtin = BUILTINS.find((c) => c.name === name);
     if (builtin) {
@@ -1267,16 +1460,16 @@ async function submit(kind, deliverAs = "steer") {
     }
     if (TERMINAL_ONLY.includes(name)) return toast(`/${name} has a terminal-only UI: run it in the Pi terminal`, true);
   }
-  if (kind === "send" && text.startsWith("!")) return toast("! shell mode is only available in the Pi terminal", true);
+  if (text.startsWith("!")) return toast("! shell mode is only available in the Pi terminal", true);
 
   try {
-    await api("/api/submit", { action: kind, text, deliverAs });
+    await api("/api/submit", { text, deliverAs });
   } catch (error) {
     return toast(`Submit failed: ${error.message}`, true);
   }
   clearComposer();
-  toast(kind === "send" ? (state.idle ? "Sent" : deliverAs === "steer" ? "Steering message sent" : "Queued") : "Put into the Pi terminal editor");
-  if (kind === "send") setTimeout(scrollToBottom, 50);
+  toast(state.idle ? "Sent" : deliverAs === "steer" ? "Steering message sent" : "Queued");
+  setTimeout(scrollToBottom, 50);
 }
 
 async function abort() {
@@ -1310,7 +1503,7 @@ input.addEventListener("keydown", (e) => {
       e.preventDefault();
       // The selection is already filled in, so Enter sends, for commands and @ files alike; Tab only completes.
       acceptCompletion();
-      submit("send");
+      submit();
       return;
     }
     if (e.key === "Escape") {
@@ -1319,12 +1512,9 @@ input.addEventListener("keydown", (e) => {
       return closeCompletion();
     }
   }
-  if (e.key === "Enter" && e.ctrlKey && e.shiftKey) {
+  if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.altKey) {
     e.preventDefault();
-    submit("fill");
-  } else if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.altKey) {
-    e.preventDefault();
-    submit("send");
+    submit();
   } else if (e.key === "Tab" && !e.shiftKey && !e.ctrlKey && !e.altKey) {
     e.preventDefault();
     input.setRangeText("  ", input.selectionStart, input.selectionEnd, "end");
@@ -1341,9 +1531,9 @@ composer.addEventListener("drop", (e) => {
 
 /* ---------- Wiring ---------- */
 
-$("fill").innerHTML = `${ICONS.insert}<span>Fill</span>`;
-$("fill").onclick = () => submit("fill");
-$("send").onclick = () => ($("send").classList.contains("stop") ? abort() : submit("send"));
+renderPin();
+$("pin").onclick = () => setAlwaysOnTop(localStorage.getItem(TOPMOST_KEY) !== "1");
+$("send").onclick = () => ($("send").classList.contains("stop") ? abort() : submit());
 
 // Pi's app keybindings, read from its effective configuration.
 document.addEventListener("keydown", (e) => {
@@ -1361,12 +1551,14 @@ document.addEventListener("keydown", (e) => {
   }
 
   const handlers = [
-    ["app.message.followUp", () => submit("send", "followUp")],
+    ["app.message.followUp", () => submit("followUp")],
     ["app.thinking.cycle", cycleThinking],
     ["app.model.cycleForward", () => cycleModel("forward")],
     ["app.model.cycleBackward", () => cycleModel("backward")],
     ["app.model.select", openModelPicker],
     ["app.message.copy", copyLastReply],
+    ["tui.altScreen.previousPrompt", () => jumpReply(-1)],
+    ["tui.altScreen.nextPrompt", () => jumpReply(1)],
     ["app.tools.expand", toggleTools],
     ["app.thinking.toggle", toggleThinking],
     ["app.message.dequeue", () => toast(`Queued messages can only be restored in the Pi terminal (${keysOf("app.message.dequeue")})`)],
@@ -1517,6 +1709,7 @@ function setConnected(on) {
     setBanner("Disconnected from Pi, reconnecting… If Pi has exited, restart it and press Alt+G", "error");
   } else {
     setBanner("");
+    if (editorDirty) syncEditor();
   }
   updateSendButton();
 }
@@ -1531,6 +1724,9 @@ function connect() {
   events.onmessage = (e) => {
     const ev = JSON.parse(e.data);
     switch (ev.type) {
+      case "editor":
+        applyRemoteEditor(ev.text);
+        break;
       case "state": {
         // Entries written outside message events (bash, model changes, labels) still resync.
         const changed = state && state.entries !== ev.state.entries;
@@ -1548,6 +1744,7 @@ function connect() {
         drawLive();
         break;
       case "live-end":
+        streaming = null;
         liveEnded = true;
         break;
       case "tool":
@@ -1565,6 +1762,7 @@ function connect() {
       case "session":
         if (ev.reload) return location.reload();
         setBanner("");
+        streaming = null;
         rendered.forEach((r) => r.el.remove());
         rendered = [];
         liveEl.innerHTML = "";
@@ -1595,17 +1793,22 @@ await refreshState();
 await loadCommands();
 await loadUI();
 keys = await api("/api/keys");
+// Older extension processes omit these. Pi's Windows defaults jump the transcript with Ctrl+Up / Ctrl+Down.
+if (!Object.hasOwn(keys, "tui.altScreen.previousPrompt")) keys["tui.altScreen.previousPrompt"] = ["ctrl+up"];
+if (!Object.hasOwn(keys, "tui.altScreen.nextPrompt")) keys["tui.altScreen.nextPrompt"] = ["ctrl+down"];
 hideThinking = state.hideThinking;
 document.body.classList.toggle("hide-thinking", hideThinking);
 await requestSync();
-// Pi's current editor text wins over a stale local draft.
+// Pi's current editor text wins over a stale local draft. A draft is pushed once the page connects.
 input.value = state.editorText || localStorage.getItem(DRAFT_KEY) || "";
+if (!state.editorText && input.value) editorDirty = true;
 autoGrow();
 updateSendButton();
 scrollToBottom();
 input.focus();
 input.setSelectionRange(input.value.length, input.value.length);
 connect();
+if (localStorage.getItem(TOPMOST_KEY) === "1") setAlwaysOnTop(true, { quiet: true });
 </script>
 </body>
 </html>

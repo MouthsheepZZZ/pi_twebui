@@ -27,16 +27,18 @@ pi --extension /path/to/pi-twebui
 ## 页面能做什么
 
 - 用 GitHub Flavored Markdown 渲染回复，包括表格、脚注、任务列表、KaTeX 公式和 Mermaid 图，代码块有语法高亮。
-- 复制代码块、表格（TSV 或 Markdown）、Mermaid 源码，以及整段回复。复制时使用 CRLF 换行。
+- 复制代码块、表格（TSV 或 Markdown）和 Mermaid 源码。每一轮对话只有最终结论带复制按钮。复制时使用 CRLF 换行。
 - 工具调用默认折叠。`edit` 和 `write` 展开后显示 diff。
 - 颜色跟随 Pi 当前的终端主题。
-- 粘贴或拖入图片时，会像终端 `Ctrl+V` 一样写成临时文件，并把路径插入输入框，同时显示缩略图。
+- 粘贴或拖入图片时，会像终端 `Ctrl+V` 一样写成临时文件，并把路径插入输入框。发送后对话里仍显示这张图，消息内容仍是路径。
+- 网页输入框和终端输入框保持同一段文字。
 - 输入 `/` 补全命令，输入 `@` 补全文件。方向键移动时立刻填入候选项，回车发送；Tab 只完成补全。
-- 快捷键读取 Pi 当前生效的键位，包括 `keybindings.json` 里的覆盖。
+- 快捷键读取 Pi 当前生效的键位，包括 `keybindings.json` 里的覆盖。`Ctrl+上` / `Ctrl+下` 在回复之间跳转。
 - 页脚显示工作目录、分支、用量、上下文和模型，和终端页脚一致。
+- Windows 上，标题栏左侧的 Pin 可以把这个窗口保持在最前。
 - `/reload` 会重载终端里的扩展，并刷新已经打开的页面。
 
-输入框旁边有两个按钮：Fill 把文字放进终端编辑器，Send 发送。Pi 正在运行时，回车会把消息作为 steer 送进当前回合。
+输入框旁只有发送按钮。Pi 正在运行时，回车会把消息作为 steer 送进当前回合。
 
 页面里的内置命令：`/new`、`/clone`、`/compact`、`/model`、`/thinking`、`/name`、`/session`、`/tree`、`/fork`、`/resume`、`/copy`、`/hotkeys`、`/reload`、`/quit`。
 

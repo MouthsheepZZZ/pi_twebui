@@ -49,9 +49,9 @@ export const ICONS = {
   chevron: svg('<path d="m9 6 6 6-6 6"/>'),
   terminal: svg('<path d="m5 8 4 4-4 4M12 16h7"/>'),
   brain: svg('<path d="M9 4a3 3 0 0 0-3 3 3 3 0 0 0-2 5 3 3 0 0 0 2 5 3 3 0 0 0 6 1V5a3 3 0 0 0-3-1ZM15 4a3 3 0 0 1 3 3 3 3 0 0 1 2 5 3 3 0 0 1-2 5 3 3 0 0 1-6 1"/>'),
-  insert: svg('<path d="M4 7h11M4 12h7M4 17h11M17 10l3 3-3 3"/>'),
   stop: svg('<rect x="6" y="6" width="12" height="12" rx="2"/>'),
   edit: svg('<path d="M4 20h4L19 9l-4-4L4 16v4Z"/><path d="m14 6 4 4"/>'),
+  pin: svg('<path d="M12 17v5"/><path d="M9 10.76 7.11 11.66A2 2 0 0 0 6 13.46V16h12v-2.54a2 2 0 0 0-1.11-1.8L15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/>'),
   spinner: '<span class="spin"></span>',
 };
 
@@ -69,7 +69,7 @@ const md = markdownit({ html: false, linkify: true, breaks: true })
   .use(texmath, { engine: katex, delimiters: ["dollars", "brackets", "beg_end"], katexOptions: { throwOnError: false } });
 
 const headButton = (action, icon, label) =>
-  `<button class="icon-btn" data-action="${action}" title="${label}">${ICONS[icon]}<span>${label}</span></button>`;
+  `<button class="icon-btn" data-action="${action}" title="${label}" aria-label="${label}">${ICONS[icon]}</button>`;
 
 md.renderer.rules.fence = (tokens, idx) => {
   const t = tokens[idx];

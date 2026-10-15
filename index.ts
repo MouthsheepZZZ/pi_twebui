@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
+import { createReadStream, existsSync, statSync } from "node:fs";
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -46,10 +47,19 @@ const MIME: Record<string, string> = {
 	".ttf": "font/ttf",
 };
 const IMAGE_EXTENSIONS: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp", "image/bmp": "bmp" };
+const IMAGE_MIME: Record<string, string> = {
+	".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp",
+};
+// Same temp-file name Pi uses for a clipboard image. Display only; the message text is unchanged.
+const CLIPBOARD_IMAGE =
+	/pi-clipboard-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:png|jpe?g|gif|webp|bmp)/gi;
+const MAX_LOCAL_IMAGE_BYTES = 32 * 1024 * 1024;
 const MAX_BODY_BYTES = 64 * 1024 * 1024;
 const MAX_TOOL_TEXT = 6000;
 const MAX_DIFF_LINES = 400;
 const THEME_POLL_MS = 1000;
+const EDITOR_POLL_MS = 100;
+const MAX_EDITOR_TEXT = 200_000;
 const DIFF_CONTEXT_LINES = 2;
 // Pi theme tokens the page uses; everything else keeps the page's own neutral palette.
 const THEME_TOKENS = [
@@ -81,6 +91,8 @@ interface Host {
 	heartbeat?: ReturnType<typeof setInterval>;
 	clients: Set<ServerResponse>;
 	handler?: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
+	// Chrome window pinned by the title-bar button. Survives page reloads in the same process.
+	topmostHwnd?: string;
 }
 const HOST_KEY = Symbol.for("pi-twebui.host");
 const globals = globalThis as typeof globalThis & { [HOST_KEY]?: Host };
@@ -159,7 +171,7 @@ interface AssistantItem {
 
 type ThreadItem =
 	| AssistantItem
-	| { kind: "user"; id: string; key: string; text: string; images: { data: string; mimeType: string }[] }
+	| { kind: "user"; id: string; key: string; text: string; images: { data: string; mimeType: string }[]; imagePaths: string[] }
 	| { kind: "bash"; id: string; key: string; command: string; output: string; exitCode: number | null; cancelled: boolean }
 	| { kind: "compaction" | "branchSummary"; id: string; key: string; text: string }
 	| { kind: "custom"; id: string; key: string; title: string; text: string };
@@ -275,6 +287,27 @@ function toolDiff(name: string, args: Record<string, unknown>, details: LooseMes
 	};
 }
 
+// A pasted image is a temp-file path inside the user text, the same way the terminal stores it.
+// The page shows that file; nothing here is added to the message.
+function pastedImagePaths(text: string): string[] {
+	const paths: string[] = [];
+	const seen = new Set<string>();
+	CLIPBOARD_IMAGE.lastIndex = 0;
+	for (const match of text.matchAll(CLIPBOARD_IMAGE)) {
+		const name = match[0];
+		const head = text.slice(0, match.index ?? 0);
+		const win = /[A-Za-z]:\\(?:[^\\/:*?"<>|\r\n]*\\)*$/.exec(head);
+		const nix = /(?:^|[\s"'`])(\/(?:[^/\s"'`]+\/)*)$/.exec(head);
+		const fromText = win ? `${win[0]}${name}` : nix?.[1] ? `${nix[1]}${name}` : "";
+		const candidate = fromText && existsSync(fromText) ? fromText : join(tmpdir(), name);
+		const file = resolve(candidate);
+		if (seen.has(file) || !existsSync(file)) continue;
+		seen.add(file);
+		paths.push(file);
+	}
+	return paths;
+}
+
 function getThread(ctx: ExtensionContext): ThreadItem[] {
 	const items: ThreadItem[] = [];
 	const toolsById = new Map<string, ThreadTool>();
@@ -295,13 +328,15 @@ function getThread(ctx: ExtensionContext): ThreadItem[] {
 		const msg = entry.message;
 		if (msg.role === "user") {
 			const parts = partsOf(msg);
+			const text = textOf(parts);
 			const images = parts.filter((p): p is Extract<Part, { type: "image" }> => p.type === "image");
 			items.push({
 				kind: "user",
 				id: entry.id,
 				key: entry.id,
-				text: textOf(parts),
+				text,
 				images: images.map(({ data, mimeType }) => ({ data, mimeType })),
+				imagePaths: pastedImagePaths(text),
 			});
 		} else if (msg.role === "assistant") {
 			const item = assistantItem(entry.id, msg);
@@ -492,6 +527,50 @@ function openUrl(url: string) {
 	spawn(cmd, args, { stdio: "ignore", detached: true, windowsHide: true }).unref();
 }
 
+// The page cannot change OS window z-order. PowerShell calls SetWindowPos on the Chrome window.
+function applyWindowTopmost(title: string, enabled: boolean, pageHost: string, savedHwnd: string | undefined): Promise<string> {
+	if (process.platform !== "win32") return Promise.reject(new Error("Always on top is only available on Windows"));
+	const payload = JSON.stringify({ title, enabled, host: pageHost, hwnd: savedHwnd ?? "" });
+	return new Promise((resolve, reject) => {
+		const child = spawn(
+			"powershell.exe",
+			["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", join(ROOT, "topmost.ps1")],
+			{ windowsHide: true, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, PI_TOPMOST_JSON: payload } },
+		);
+		let stdout = "";
+		let stderr = "";
+		const timer = setTimeout(() => {
+			child.kill();
+			reject(new Error("Timed out while updating the window"));
+		}, 8000);
+		child.stdout.on("data", (chunk) => {
+			stdout += chunk;
+		});
+		child.stderr.on("data", (chunk) => {
+			stderr += chunk;
+		});
+		child.on("error", (error) => {
+			clearTimeout(timer);
+			reject(error);
+		});
+		child.on("close", (code) => {
+			clearTimeout(timer);
+			if (code === 0) {
+				const hwnd = stdout.trim();
+				if (!/^-?\d+$/.test(hwnd)) reject(new Error("Unexpected window handle"));
+				else resolve(hwnd);
+				return;
+			}
+			const errors: Record<number, string> = {
+				2: "Could not find the Pi TWebui window. Focus it and try again.",
+				3: "More than one window has this title. Focus the Pi TWebui window and try again.",
+				4: "Windows could not change the window z-order.",
+			};
+			reject(new Error(errors[code ?? 0] ?? (stderr.trim() || "Could not change the window z-order")));
+		});
+	});
+}
+
 async function readJson<T>(req: IncomingMessage): Promise<T> {
 	const chunks: Buffer[] = [];
 	let size = 0;
@@ -512,6 +591,22 @@ async function sendFile(res: ServerResponse, path: string) {
 	const data = await readFile(path);
 	res.writeHead(200, { "content-type": MIME[extname(path)] ?? "application/octet-stream", "cache-control": "no-store" });
 	res.end(data);
+}
+
+// Only image files already named in this session's user messages. The bytes are not part of the prompt.
+function sendLocalImage(current: ExtensionContext, res: ServerResponse, rawPath: string) {
+	const file = resolve(rawPath);
+	const mime = IMAGE_MIME[extname(file).toLowerCase()];
+	const allowed = Boolean(mime) && getThread(current).some((item) => item.kind === "user" && item.imagePaths.includes(file));
+	if (!allowed) return sendJson(res, 404, { error: "Not found" });
+	const stat = statSync(file);
+	if (!stat.isFile() || stat.size > MAX_LOCAL_IMAGE_BYTES) return sendJson(res, 404, { error: "Not found" });
+	res.writeHead(200, {
+		"content-type": mime,
+		"content-length": stat.size,
+		"cache-control": "private, max-age=86400",
+	});
+	createReadStream(file).on("error", () => res.destroy()).pipe(res);
 }
 
 function broadcast(event: Record<string, unknown>) {
@@ -556,7 +651,6 @@ function closeServer() {
 /* ---------- Requests from the page ---------- */
 
 interface SubmitBody {
-	action: "send" | "fill";
 	text: string;
 	deliverAs: "steer" | "followUp";
 }
@@ -677,6 +771,12 @@ class UIMirror {
 			original.setWorkingMessage(message);
 			this.workingMessage = message ?? "";
 			this.emitChrome();
+		};
+		// setEditorText changes the buffer without asking the terminal to draw. A no-op status
+		// update is the public call that does request a redraw, and it stays off the page.
+		target.setEditorText = (text: string) => {
+			original.setEditorText(text);
+			original.setStatus("pi-twebui-sync", undefined);
 		};
 		target.select = (title: string, options: string[], opts?: DialogOpts) =>
 			this.race({ kind: "select", title, options }, opts, (o) => original.select(title, options, o));
@@ -851,6 +951,45 @@ export default function (pi: ExtensionAPI) {
 
 	let themeTimer: ReturnType<typeof setInterval> | undefined;
 	let lastTheme = "";
+	// Pi has no editor-change event. Poll the terminal editor and skip echoes of page writes.
+	let editorTimer: ReturnType<typeof setInterval> | undefined;
+	let editorShown = "";
+	let editorFromPage: string | undefined;
+
+	function editorTextOf(current: ExtensionContext): string {
+		return current.ui.getEditorText();
+	}
+
+	function watchEditor(current: ExtensionContext) {
+		editorShown = editorTextOf(current);
+		editorFromPage = undefined;
+		clearInterval(editorTimer);
+		editorTimer = setInterval(() => {
+			if (!ctx || host.clients.size === 0) return;
+			const text = editorTextOf(ctx);
+			if (text === editorShown) return;
+			if (editorFromPage !== undefined && text === editorFromPage) {
+				editorShown = text;
+				editorFromPage = undefined;
+				return;
+			}
+			editorFromPage = undefined;
+			editorShown = text;
+			broadcast({ type: "editor", text });
+		}, EDITOR_POLL_MS);
+		editorTimer.unref();
+	}
+
+	function setEditorFromPage(current: ExtensionContext, text: string): string {
+		if (typeof text !== "string") throw new Error("Missing editor text");
+		if (text.length > MAX_EDITOR_TEXT) throw new Error("Editor text is too long");
+		const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/\t/g, "    ");
+		if (editorTextOf(current) !== normalized) current.ui.setEditorText(normalized);
+		const actual = editorTextOf(current);
+		editorFromPage = actual;
+		editorShown = actual;
+		return actual;
+	}
 
 	let gitBranch: string | null = null;
 	async function refreshGitBranch(current: ExtensionContext) {
@@ -949,10 +1088,6 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	function submit(current: ExtensionContext, body: SubmitBody) {
-		if (body.action === "fill") {
-			current.ui.setEditorText(body.text);
-			return;
-		}
 		if (!body.text) throw new Error("Nothing to send");
 		// Match the terminal editor: slash commands, skills and prompt templates expand.
 		if (current.isIdle()) pi.sendUserMessage(body.text, { expandPromptTemplates: true });
@@ -1084,12 +1219,30 @@ export default function (pi: ExtensionAPI) {
 		}
 		if (path === "/app") return sendFile(res, APP_PAGE);
 		if (path === "/api/events") return openEvents(req, res);
+		if (path === "/api/local-image" && req.method === "GET") {
+			return sendLocalImage(requireCtx(), res, url.searchParams.get("path") ?? "");
+		}
+		if (path === "/api/always-on-top" && req.method === "POST") {
+			if (process.platform !== "win32") return sendJson(res, 501, { error: "Always on top is only available on Windows" });
+			const body = await readJson<{ enabled?: boolean; title?: string; host?: string }>(req);
+			const title = typeof body.title === "string" ? body.title.trim() : "";
+			if (!title || title.length > 500) return sendJson(res, 400, { error: "Missing window title" });
+			const pageHost = typeof body.host === "string" && /^[a-z0-9.:-]+:\d+$/i.test(body.host) ? body.host : "";
+			const enabled = body.enabled === true;
+			const hwnd = await applyWindowTopmost(title, enabled, pageHost, host.topmostHwnd);
+			host.topmostHwnd = enabled ? hwnd : undefined;
+			return sendJson(res, 200, { on: enabled });
+		}
 
 		const current = requireCtx();
 		if (req.method === "POST") {
 			if (path === "/api/submit") {
 				submit(current, await readJson<SubmitBody>(req));
 				return sendJson(res, 200, {});
+			}
+			if (path === "/api/editor") {
+				const body = await readJson<{ text?: string }>(req);
+				return sendJson(res, 200, { text: setEditorFromPage(current, body.text ?? "") });
 			}
 			// Like Pi's Ctrl+V: a pasted image becomes a temp file and its path goes into the editor text.
 			if (path === "/api/paste-image") {
@@ -1128,6 +1281,7 @@ export default function (pi: ExtensionAPI) {
 					"app.interrupt", "app.thinking.cycle", "app.model.cycleForward", "app.model.cycleBackward", "app.model.select", "app.message.copy",
 					"app.tools.expand", "app.thinking.toggle", "app.message.followUp", "app.message.dequeue",
 					"app.session.new", "app.session.tree", "app.session.fork", "app.session.resume",
+					"tui.altScreen.previousPrompt", "tui.altScreen.nextPrompt",
 				] as const;
 				return sendJson(res, 200, Object.fromEntries(ids.map((id) => [id, keys.getKeys(id)])));
 			}
@@ -1171,6 +1325,7 @@ export default function (pi: ExtensionAPI) {
 			pushState();
 		}, THEME_POLL_MS);
 		themeTimer.unref();
+		watchEditor(current);
 		activity = null;
 		queue.steering.length = 0;
 		queue.followUp.length = 0;
@@ -1181,6 +1336,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_shutdown", async (event) => {
 		ctx = undefined;
 		clearInterval(themeTimer);
+		clearInterval(editorTimer);
 		mirror?.dispose();
 		mirror = undefined;
 		if (host.handler === handle) host.handler = undefined;
