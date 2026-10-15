@@ -1,0 +1,1611 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Pi TWebui</title>
+<link rel="icon" type="image/svg+xml" href="/icon.svg">
+<link rel="stylesheet" href="/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="/vendor/hljs.css" id="hljs-theme">
+<link rel="stylesheet" href="/common.css">
+<style>
+  body { display: flex; overflow: hidden; }
+
+  /* ---------- Main column ---------- */
+  main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  header {
+    flex: none; display: flex; align-items: center; gap: 8px; height: 48px; padding: 0 12px;
+    border-bottom: 1px solid var(--border); background: var(--bg);
+  }
+  .dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 18%, transparent); }
+  .dot.busy { background: var(--warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 18%, transparent); animation: pulse 1.2s infinite; }
+  .dot.offline { background: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 18%, transparent); }
+  @keyframes pulse { 50% { opacity: .35; } }
+  header .title { min-width: 0; color: var(--text); font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .banner { flex: none; display: none; padding: 7px 16px; font-size: 13px; text-align: center; background: color-mix(in srgb, var(--warn) 16%, var(--bg)); color: var(--warn); }
+  .banner.show { display: block; }
+  .banner.error { background: color-mix(in srgb, var(--danger) 16%, var(--bg)); color: var(--danger); }
+
+  /* ---------- Thread ---------- */
+  #scroller { position: relative; flex: 1; overflow-y: auto; }
+  #thread, #live, #working { max-width: 820px; margin: 0 auto; padding: 0 24px; }
+  #thread { padding-top: 28px; }
+  #working { display: none; padding-bottom: 24px; color: var(--muted); font-size: 13.5px; }
+  #working.show { display: block; }
+  #ext-header { max-width: 820px; margin: 0 auto; padding: 20px 24px 0; }
+  #ext-header:empty { display: none; }
+  #ext-header .widget { white-space: pre; }
+  .queue { max-width: 820px; margin: 0 auto 8px; padding: 0 6px; font-size: 12.5px; color: var(--muted); }
+  .queue:empty { display: none; }
+  .queue .q { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .queue .q b { font-weight: 500; color: var(--text-2); margin-right: 6px; }
+  .queue .hint { margin-top: 2px; font-size: 11.5px; }
+  .shimmer {
+    background: linear-gradient(90deg, var(--muted) 0%, var(--text) 50%, var(--muted) 100%); background-size: 200% 100%;
+    -webkit-background-clip: text; background-clip: text; color: transparent; animation: shimmer 1.6s linear infinite;
+  }
+  @keyframes shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+  .empty { color: var(--muted); text-align: center; margin-top: 16vh; }
+  .empty h2 { color: var(--text); font-weight: 600; font-size: 22px; margin-bottom: 6px; }
+
+  .turn-user { position: relative; display: flex; flex-direction: column; align-items: flex-end; margin: 28px 0 18px; }
+  .turn-user:first-child { margin-top: 0; }
+  .bubble {
+    max-width: 82%; padding: 10px 16px; border-radius: 18px; background: var(--user-bg); color: var(--user-text);
+    white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14.5px; line-height: 1.6;
+  }
+  .user-images { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-bottom: 8px; }
+  .user-images img { max-width: 200px; max-height: 160px; border-radius: 10px; border: 1px solid var(--border); cursor: zoom-in; }
+  .turn-assistant { position: relative; margin: 0 0 6px; }
+  .turn-assistant.has-reply { padding-bottom: 34px; }
+  .turn-assistant .reply { font-size: 15px; }
+  .turn-assistant.focus .reply { animation: flash 1.4s ease-out; border-radius: 8px; }
+  @keyframes flash { from { background: color-mix(in srgb, var(--accent) 12%, transparent); } to { background: transparent; } }
+  .reply-actions { position: absolute; left: -6px; bottom: 2px; display: flex; gap: 2px; opacity: 0; transition: opacity .15s; }
+  .turn-assistant:hover .reply-actions, .turn-assistant.focus .reply-actions { opacity: 1; }
+  .note { margin: 8px 0; padding: 8px 12px; border-radius: 10px; font-size: 13px; white-space: pre-wrap; }
+  .note.error { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); }
+  .note.muted { color: var(--muted); padding: 0; }
+
+  .divider { display: flex; align-items: center; gap: 12px; margin: 22px 0; color: var(--muted); font-size: 12.5px; }
+  .divider::before, .divider::after { content: ""; flex: 1; border-top: 1px solid var(--border); }
+  .divider summary { cursor: pointer; list-style: none; }
+  .divider summary::-webkit-details-marker { display: none; }
+  .summary-box { margin: -10px 0 22px; padding: 12px 16px; border-radius: 12px; background: var(--surface); font-size: 13.5px; }
+  .card { margin: 14px 0; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .card-head { padding: 6px 12px; background: var(--surface); color: var(--muted); font: 12px var(--mono); }
+  .card-body { padding: 10px 14px; font-size: 14px; }
+  .card pre { margin: 0; padding: 10px 14px; max-height: 360px; overflow: auto; font: 12.5px/1.55 var(--mono); color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+  /* Steps: thinking + tool calls, collapsed like Codex's activity log */
+  /* Spacing lives on each step, so tool calls in one message and across turns have the same rhythm. */
+  .steps { margin: 2px 0 0; }
+  .steps:empty { display: none; }
+  .step { margin: 0 0 10px; }
+  .step > summary {
+    display: flex; align-items: center; gap: 8px; list-style: none; cursor: pointer; padding: 4px 8px; margin: 0 -8px;
+    border-radius: 8px; color: var(--muted); font-size: 13px; min-width: 0;
+  }
+  .step > summary::-webkit-details-marker { display: none; }
+  .step > summary:hover { background: var(--surface); color: var(--text-2); }
+  .step > summary svg { width: 14px; height: 14px; flex: none; }
+  .step > summary .chev { transition: transform .15s; }
+  .step[open] > summary .chev { transform: rotate(90deg); }
+  .step .name { color: var(--text-2); font-weight: 500; flex: none; }
+  .step .summary { font-family: var(--mono); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .step.error .name { color: var(--danger); }
+  .step .badge { flex: none; font-size: 11px; padding: 0 6px; border-radius: 6px; background: color-mix(in srgb, var(--danger) 16%, transparent); color: var(--danger); }
+  .step .run { display: none; }
+  .step.running .run { display: inline-block; }
+  .step.running .name { color: var(--text); }
+  .step .body { margin: 4px 0 10px 22px; border-left: 1px solid var(--border); padding-left: 14px; }
+  .step .body pre {
+    margin: 6px 0; padding: 10px 12px; max-height: 320px; overflow: auto; background: var(--surface); border-radius: 8px;
+    font: 12px/1.55 var(--mono); color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+  .step .body .label { font-size: 11px; letter-spacing: .06em; color: var(--muted); }
+  .step .diffstat { flex: none; font: 12px var(--mono); }
+  .step .diffstat .add { color: var(--diff-add); }
+  .step .diffstat .del { color: var(--diff-del); }
+  .diff-block { margin: 6px 0; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--code-bg); }
+  .diff-block .block-head { height: 30px; }
+  .diff-block pre { margin: 0; padding: 6px 0; max-height: 420px; overflow: auto; font: 12px/1.55 var(--mono); }
+  .diff-block pre.diff-args { padding: 10px 12px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-2); }
+  .dl { display: flex; min-width: max-content; padding-right: 12px; }
+  .dl .n { flex: none; width: 4.5em; padding-right: 10px; text-align: right; color: var(--muted); opacity: .7; user-select: none; }
+  .dl .s { flex: none; width: 1.4em; user-select: none; }
+  .dl .t { white-space: pre; }
+  .dl.add { background: color-mix(in srgb, var(--diff-add) 14%, transparent); }
+  .dl.add .s, .dl.add .t { color: color-mix(in srgb, var(--diff-add) 55%, var(--text)); }
+  .dl.del { background: color-mix(in srgb, var(--diff-del) 14%, transparent); }
+  .dl.del .s, .dl.del .t { color: color-mix(in srgb, var(--diff-del) 55%, var(--text)); }
+  .dl.ctx .t { color: var(--text-2); }
+  .dl.gap .t { color: var(--muted); }
+  .step .live-out { display: none; }
+  .step.running .live-out { display: block; }
+  .step .thinking { color: var(--thinking); font-size: 13.5px; font-style: italic; white-space: pre-wrap; }
+  body.hide-thinking .step.thinking-step { display: none; }
+  .spin {
+    display: inline-block; width: 12px; height: 12px; flex: none; border-radius: 50%;
+    border: 2px solid var(--border-strong); border-top-color: var(--text); animation: rot .8s linear infinite;
+  }
+  @keyframes rot { to { transform: rotate(360deg); } }
+
+  /* ---------- Composer ---------- */
+  footer { flex: none; position: relative; padding: 0 24px 16px; }
+  .composer {
+    position: relative; max-width: 820px; margin: 0 auto; border: 1px solid var(--border-strong); border-radius: 22px; background: var(--surface);
+    box-shadow: 0 8px 32px rgba(0,0,0,.35); transition: border-color .15s, box-shadow .15s;
+  }
+  .composer { border-color: color-mix(in srgb, var(--edge, var(--border-strong)) 55%, var(--border-strong)); }
+  .composer:focus-within { border-color: var(--edge, var(--muted)); }
+  .composer.dragging { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+  .attachments { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 14px 0; }
+  .attachments:empty { display: none; }
+  .thumb { position: relative; width: 64px; height: 64px; border-radius: 12px; overflow: hidden; border: 1px solid var(--border-strong); background: var(--surface-2); }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; cursor: zoom-in; }
+  .thumb button {
+    position: absolute; top: 3px; right: 3px; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%;
+    background: rgba(0,0,0,.75); color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center;
+  }
+  .thumb button svg { width: 12px; height: 12px; }
+  textarea {
+    display: block; width: 100%; min-height: 56px; max-height: 45vh; resize: none; border: 0; outline: 0; background: transparent;
+    color: var(--text); padding: 14px 18px 6px; font: 15px/1.6 var(--sans); tab-size: 2;
+  }
+  textarea::placeholder { color: var(--muted); }
+  .composer-bar { display: flex; align-items: center; gap: 2px; padding: 6px 8px 8px 10px; }
+  .composer-bar .spacer { flex: 1; }
+  .send {
+    width: 34px; height: 34px; border: 0; border-radius: 50%; background: var(--text); color: var(--bg); cursor: pointer;
+    display: flex; align-items: center; justify-content: center; transition: opacity .15s;
+  }
+  .send svg { width: 18px; height: 18px; }
+  .send:disabled { opacity: .3; cursor: default; }
+  .send.stop { background: var(--surface-2); color: var(--text); border: 1px solid var(--border-strong); }
+  /* Extension widgets and statuses mirrored from the terminal */
+  .widgets { max-width: 820px; margin: 0 auto; display: flex; flex-direction: column; gap: 6px; }
+  .widgets:empty { display: none; }
+  #widgets-above { margin-bottom: 8px; }
+  #widgets-below { margin-top: 8px; }
+  .widget {
+    padding: 8px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--code-bg);
+    font: 12.5px/1.5 var(--mono); color: var(--text-2); white-space: pre-wrap; overflow-x: auto;
+  }
+  /* Footer under the composer, mirroring Pi's terminal footer */
+  .pi-footer { max-width: 820px; margin: 8px auto 0; padding: 0 6px; font: 11.5px/1.6 var(--mono); color: var(--muted); }
+  .pi-footer .line { display: flex; gap: 12px; white-space: nowrap; overflow: hidden; }
+  .pi-footer .line > span { overflow: hidden; text-overflow: ellipsis; }
+  .pi-footer .grow { flex: 1; min-width: 0; }
+  .pi-footer .right { flex: none; }
+  .pi-footer .warn { color: var(--warn); }
+  .pi-footer .bad { color: var(--danger); }
+  .pi-footer .statuses { display: flex; flex-wrap: wrap; gap: 0 12px; }
+  .pi-footer .custom { white-space: pre; overflow-x: auto; }
+  .ansi a { color: var(--accent); }
+
+  /* Extension dialogs */
+  .ext-dialog { margin: 0 auto 10px; max-width: 820px; padding: 14px 16px; border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--border)); border-radius: 16px; background: color-mix(in srgb, var(--warn) 8%, var(--bg)); }
+  .ext-dialog h4 { margin: 0 0 4px; font-size: 14px; white-space: pre-wrap; }
+  .ext-dialog .msg { color: var(--text-2); font-size: 13px; white-space: pre-wrap; margin-bottom: 10px; }
+  .ext-dialog .opts { display: flex; flex-direction: column; gap: 4px; }
+  .ext-dialog .opts button {
+    text-align: left; padding: 7px 12px; border-radius: 9px; border: 1px solid var(--border-strong); background: var(--surface);
+    color: var(--text); cursor: pointer; font-size: 13.5px;
+  }
+  .ext-dialog .opts button:hover, .ext-dialog .opts button:focus { border-color: var(--accent); outline: 0; }
+  .ext-dialog textarea { min-height: 38px; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--bg); font-size: 14px; }
+  .ext-dialog .row { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 10px; }
+  .ext-dialog .row .count { margin-right: auto; color: var(--muted); font-size: 12px; }
+  kbd { font: 11px var(--mono); padding: 1px 5px; border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 5px; color: var(--text-2); }
+
+  /* Autocomplete for /commands and @files, anchored above the composer */
+  .complete {
+    position: absolute; left: 12px; right: 12px; bottom: calc(100% + 8px); max-height: 300px; overflow-y: auto; display: none;
+    background: var(--surface); border: 1px solid var(--border-strong); border-radius: 14px; padding: 6px; box-shadow: 0 12px 40px rgba(0,0,0,.5); z-index: 20;
+  }
+  .complete.show { display: block; }
+  .complete .opt { display: flex; gap: 12px; align-items: baseline; padding: 6px 10px; border-radius: 8px; cursor: pointer; font-size: 13.5px; }
+  .complete .opt.on { background: var(--surface-2); }
+  .complete .opt .k { font-family: var(--mono); color: var(--text); white-space: nowrap; }
+  .complete .opt .d { color: var(--muted); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .complete .opt .s { margin-left: auto; color: var(--muted); font-size: 11px; flex: none; }
+
+  /* ---------- Menus and dialogs ---------- */
+  dialog { border: 0; padding: 0; background: transparent; color: var(--text); }
+  dialog::backdrop { background: rgba(0,0,0,.6); }
+  #zoom { max-width: 94vw; max-height: 94vh; }
+  #zoom::backdrop { background: rgba(0,0,0,.8); }
+  #zoom img { display: block; max-width: 92vw; max-height: 92vh; border-radius: 10px; }
+  #modal { width: min(520px, 92vw); }
+  .modal-box { padding: 20px; border-radius: 16px; background: var(--surface); border: 1px solid var(--border-strong); }
+  .modal-box h3 { margin: 0 0 8px; font-size: 16px; }
+  .modal-box .msg { color: var(--text-2); font-size: 13.5px; white-space: pre-wrap; margin-bottom: 12px; }
+  .modal-box textarea {
+    min-height: 40px; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--bg); font-size: 14px;
+  }
+  .modal-box .row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+  .btn { height: 32px; padding: 0 14px; border-radius: 9px; border: 1px solid var(--border-strong); background: transparent; cursor: pointer; font-size: 13px; }
+  .btn.primary { background: var(--text); color: var(--bg); border-color: var(--text); }
+  .btn.danger { background: var(--danger); color: #fff; border-color: var(--danger); }
+  /* Selector overlay for /model, /resume, /tree, /fork, /thinking, like Pi's terminal selectors */
+  #picker { width: min(680px, 94vw); margin-top: 12vh; }
+  .picker { display: flex; flex-direction: column; max-height: 70vh; border-radius: 16px; background: var(--surface); border: 1px solid var(--border-strong); box-shadow: 0 16px 48px rgba(0,0,0,.45); }
+  .picker-title { flex: none; padding: 16px 18px 0; font-size: 13px; color: var(--muted); }
+  .picker input {
+    flex: none; margin: 12px 14px 8px; height: 44px; padding: 0 16px; border: 1px solid var(--border-strong); border-radius: 12px;
+    background: var(--bg); color: var(--text); outline: 0; font: 15px/44px var(--sans);
+  }
+  .picker input:focus { border-color: var(--accent); }
+  .picker-list { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px 8px; }
+  .picker-item { display: flex; align-items: baseline; gap: 10px; padding: 7px 10px; border-radius: 8px; cursor: pointer; font-size: 13.5px; min-width: 0; }
+  .picker-item.on { background: var(--surface-2); }
+  .picker-item .mark { flex: none; width: 12px; color: var(--accent); }
+  .picker-item .label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .picker-item .detail { flex: none; max-width: 45%; color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .picker-item.dim .label { color: var(--muted); }
+  .picker-item .role { flex: none; font-weight: 600; }
+  .picker-item .role.user { color: var(--accent); }
+  .picker-item .role.assistant { color: var(--ok); }
+  .picker-group { padding: 8px 10px 2px; color: var(--muted); font-size: 11px; }
+  .picker-empty { padding: 14px; text-align: center; color: var(--muted); font-size: 13px; }
+  .picker-hint { flex: none; padding: 10px 18px 12px; border-top: 1px solid var(--border); color: var(--muted); font-size: 11.5px; }
+  .kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; font-size: 13px; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <span class="dot" id="dot"></span>
+    <span class="title" id="title"></span>
+  </header>
+  <div class="banner" id="banner"></div>
+
+  <div id="scroller">
+    <div id="ext-header"></div>
+    <div id="thread"></div>
+    <div id="live"></div>
+    <div id="working"><span class="shimmer" id="working-text">Thinking…</span></div>
+  </div>
+
+  <footer>
+    <div id="ext-dialogs"></div>
+    <div class="queue" id="queue"></div>
+    <div class="widgets" id="widgets-above"></div>
+    <div class="composer" id="composer">
+      <div class="complete" id="complete"></div>
+      <div class="attachments" id="attachments"></div>
+      <textarea id="input" rows="1" spellcheck="false"></textarea>
+      <div class="composer-bar">
+        <button class="icon-btn" id="fill" title="Put the text into the Pi terminal editor (Ctrl+Shift+Enter)"></button>
+        <div class="spacer"></div>
+        <button class="send" id="send"></button>
+      </div>
+    </div>
+    <div class="widgets" id="widgets-below"></div>
+    <div class="pi-footer" id="pi-footer"></div>
+  </footer>
+</main>
+
+<dialog id="zoom"><img id="zoom-img" alt=""></dialog>
+<dialog id="modal"><form class="modal-box" id="modal-form" method="dialog"></form></dialog>
+<dialog id="picker"><div class="picker"><div class="picker-title" id="picker-title"></div><input id="picker-filter" spellcheck="false"><div class="picker-list" id="picker-list"></div><div class="picker-hint" id="picker-hint"></div></div></dialog>
+
+<script src="/vendor/markdown-it.js"></script>
+<script src="/vendor/footnote.js"></script>
+<script src="/vendor/tasklists.js"></script>
+<script src="/vendor/katex/katex.min.js"></script>
+<script src="/vendor/texmath.js"></script>
+<script src="/vendor/hljs.js"></script>
+<script src="/vendor/mermaid.js"></script>
+<script type="module">
+import { api, copyText, escapeHtml, ICONS, renderMarkdown, setMermaidTheme, toast } from "/common.js";
+import { AnsiUp } from "/vendor/ansi_up.js";
+
+const $ = (id) => document.getElementById(id);
+const scroller = $("scroller");
+const threadEl = $("thread");
+const liveEl = $("live");
+const input = $("input");
+const composer = $("composer");
+const DRAFT_KEY = "pi-compose-draft";
+const TOKEN = new URLSearchParams(location.search).get("token");
+
+
+// Pasted images live as temp files referenced by path in the text; this keeps their previews while the path is in the text.
+const attachments = [];
+let state = null;
+let rendered = [];      // [{ key, el, item }] in thread order
+let commands = [];
+let keys = {};
+// Pi's Ctrl+O / Ctrl+T state: tools start collapsed, thinking follows Pi's hideThinkingBlock setting.
+let toolsExpanded = false;
+let hideThinking = false;
+let connected = true;
+const runningTools = new Map(); // toolCallId -> partial output
+
+const atBottom = () => scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
+const scrollToBottom = () => { scroller.scrollTop = scroller.scrollHeight; };
+const chev = () => ICONS.chevron.replace("<svg", '<svg class="chev"');
+
+async function action(body, okMessage) {
+  try {
+    const result = await api("/api/action", body);
+    if (okMessage) toast(okMessage);
+    return result;
+  } catch (error) {
+    toast(error.message, true);
+    return null;
+  }
+}
+
+function zoom(src) {
+  $("zoom-img").src = src;
+  $("zoom").showModal();
+}
+$("zoom").onclick = () => $("zoom").close();
+
+/* ---------- Selector overlay and modal ---------- */
+
+// Keyboard-driven list like Pi's terminal selectors. items: [{ label, detail?, mark?, prefix?, prefixClass?,
+// indent?, dim?, section?, value }]. Resolves to the picked value, or undefined when dismissed.
+function pick({ title, items, selected = 0, placeholder = "Type to filter", hint = "↑↓ select · Enter confirm · Esc cancel", onKey }) {
+  const dialog = $("picker");
+  const filter = $("picker-filter");
+  const list = $("picker-list");
+  $("picker-title").textContent = title;
+  $("picker-hint").textContent = hint;
+  filter.value = "";
+  filter.placeholder = placeholder;
+  return new Promise((resolve) => {
+    let shown = [];
+    let rows = [];
+    let index = selected;
+    let done = false;
+    const finish = (value) => {
+      if (done) return;
+      done = true;
+      if (dialog.open) dialog.close();
+      resolve(value);
+    };
+    const highlight = () => {
+      rows.forEach((row, i) => row.classList.toggle("on", i === index));
+      rows[index]?.scrollIntoView({ block: "nearest" });
+    };
+    const draw = () => {
+      const q = filter.value.trim().toLowerCase();
+      shown = q ? items.filter((it) => `${it.label} ${it.detail ?? ""}`.toLowerCase().includes(q)) : items;
+      index = Math.min(Math.max(index, 0), shown.length - 1);
+      list.innerHTML = shown.length ? "" : '<div class="picker-empty">No matches</div>';
+      rows = [];
+      let section;
+      shown.forEach((it, i) => {
+        if (!q && it.section && it.section !== section) {
+          section = it.section;
+          list.insertAdjacentHTML("beforeend", `<div class="picker-group">${escapeHtml(section)}</div>`);
+        }
+        const row = document.createElement("div");
+        row.className = "picker-item" + (it.dim ? " dim" : "");
+        row.style.paddingLeft = `${10 + (q ? 0 : it.indent ?? 0) * 14}px`;
+        row.innerHTML = '<span class="mark"></span>' + (it.prefix ? `<span class="role ${it.prefixClass ?? ""}"></span>` : "") +
+          '<span class="label"></span><span class="detail"></span>';
+        row.querySelector(".mark").textContent = it.mark ?? "";
+        if (it.prefix) row.querySelector(".role").textContent = it.prefix;
+        row.querySelector(".label").textContent = it.label;
+        row.querySelector(".detail").textContent = it.detail ?? "";
+        row.onmousemove = () => { if (index !== i) { index = i; highlight(); } };
+        row.onclick = () => finish(it.value);
+        list.appendChild(row);
+        rows.push(row);
+      });
+      highlight();
+    };
+    const control = {
+      refresh(nextItems, nextTitle) {
+        items = nextItems;
+        if (nextTitle) $("picker-title").textContent = nextTitle;
+        index = 0;
+        draw();
+      },
+    };
+    filter.oninput = () => { index = 0; draw(); };
+    filter.onkeydown = (e) => {
+      if (e.isComposing) return;
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        if (!shown.length) return;
+        index = (index + (e.key === "ArrowDown" ? 1 : shown.length - 1)) % shown.length;
+        highlight();
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        if (shown[index]) finish(shown[index].value);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        finish(undefined);
+      } else if (onKey?.(e, control)) {
+        e.preventDefault();
+      }
+    };
+    dialog.onclick = (e) => { if (e.target === dialog) finish(undefined); };
+    dialog.onclose = () => finish(undefined);
+    dialog.showModal();
+    draw();
+    filter.focus();
+  });
+}
+// Resolves to the entered text (input mode), true (confirm mode) or null when cancelled.
+function modal({ title, message = "", input: withInput = false, value = "", placeholder = "", ok = "OK", danger = false, html = "" }) {
+  const form = $("modal-form");
+  form.innerHTML = `<h3></h3><div class="msg"></div>${html}` +
+    (withInput ? '<textarea rows="3"></textarea>' : "") +
+    `<div class="row"><button class="btn" value="cancel">Cancel</button><button class="btn ${danger ? "danger" : "primary"}" value="ok">${escapeHtml(ok)}</button></div>`;
+  form.querySelector("h3").textContent = title;
+  form.querySelector(".msg").textContent = message;
+  form.querySelector(".msg").hidden = !message;
+  const field = form.querySelector("textarea");
+  if (field) {
+    field.value = value;
+    field.placeholder = placeholder;
+    field.onkeydown = (e) => {
+      if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); form.querySelector('[value="ok"]').click(); }
+    };
+  }
+  const dialog = $("modal");
+  dialog.returnValue = "";
+  dialog.showModal();
+  if (field) { field.focus(); field.select(); }
+  return new Promise((resolve) => {
+    dialog.onclose = () => {
+      if (dialog.returnValue !== "ok") return resolve(null);
+      resolve(field ? field.value.trim() : true);
+    };
+  });
+}
+
+/* ---------- Thread rendering ---------- */
+
+function renderSteps(item) {
+  const steps = document.createElement("div");
+  steps.className = "steps";
+  if (item.thinking) {
+    const el = document.createElement("details");
+    el.className = "step thinking-step";
+    el.innerHTML = `<summary>${chev()}${ICONS.brain}<span class="name">Thinking</span><span class="summary"></span></summary>` +
+      `<div class="body"><div class="thinking"></div></div>`;
+    el.querySelector(".summary").textContent = item.thinking.split("\n")[0];
+    el.querySelector(".thinking").textContent = item.thinking;
+    steps.appendChild(el);
+  }
+  for (const tool of item.tools) {
+    const el = document.createElement("details");
+    el.className = "step" + (tool.isError ? " error" : "");
+    el.dataset.toolId = tool.id;
+    const counts = tool.diff
+      ? `<span class="diffstat"><span class="add">+${tool.diff.added}</span>` +
+        (tool.diff.removed ? ` <span class="del">−${tool.diff.removed}</span>` : "") + `</span>`
+      : "";
+    el.innerHTML = `<summary>${chev()}${tool.diff ? ICONS.edit : ICONS.terminal}<span class="name">${escapeHtml(tool.name)}</span>` +
+      `<span class="summary"></span>${counts}${ICONS.spinner.replace('class="spin"', 'class="spin run"')}` +
+      (tool.isError ? '<span class="badge">Failed</span>' : "") + `</summary>` +
+      `<div class="body">` +
+      (tool.diff ? "" : '<div class="label">Arguments</div><pre class="args"></pre>') +
+      `<div class="live-out"><div class="label">Output (running)</div><pre class="out"></pre></div>` +
+      // A diff already shows what the edit/write tool did; its text result only matters on failure.
+      (tool.result !== undefined && (!tool.diff || tool.isError) ? '<div class="label">Result</div><pre class="result"></pre>' : "") + `</div>`;
+    el.querySelector(".summary").textContent = tool.summary;
+    if (tool.diff) el.querySelector(".body").prepend(renderDiff(tool));
+    else el.querySelector(".args").textContent = tool.args;
+    el.querySelector(".result")?.replaceChildren(tool.result || "(empty)");
+    el.open = toolsExpanded;
+    steps.appendChild(el);
+  }
+  return steps;
+}
+
+// Unified diff of an edit/write call, with a copy button for the new text like code blocks.
+function renderDiff(tool) {
+  const { diff } = tool;
+  const box = document.createElement("div");
+  box.className = "diff-block";
+  box.innerHTML = `<div class="block-head"><span class="lang"></span>` +
+    `<button class="icon-btn" data-action="args" title="Show raw arguments">${ICONS.code}<span>Args</span></button>` +
+    `<button class="icon-btn" data-action="copy" title="Copy the changed text">${ICONS.copy}<span>Copy</span></button></div>` +
+    `<pre class="diff"></pre><pre class="diff-args" hidden></pre>`;
+  box.querySelector(".lang").textContent = diff.path || tool.name;
+  const pre = box.querySelector(".diff");
+  for (const line of diff.lines) {
+    const row = document.createElement("span");
+    row.className = `dl ${line.kind}`;
+    const sign = { add: "+", del: "−", ctx: " ", gap: " " }[line.kind];
+    row.innerHTML = `<span class="n"></span><span class="s">${sign}</span><span class="t"></span>`;
+    row.children[0].textContent = line.num;
+    row.children[2].textContent = line.kind === "gap" ? "⋯" : line.text;
+    pre.appendChild(row);
+  }
+  if (diff.truncated) pre.insertAdjacentHTML("beforeend", '<span class="dl gap"><span class="n"></span><span class="s"></span><span class="t">… truncated</span></span>');
+  const args = box.querySelector(".diff-args");
+  args.textContent = tool.args;
+  box.querySelector('[data-action="args"]').onclick = () => {
+    args.hidden = !args.hidden;
+    pre.hidden = !args.hidden;
+  };
+  const newText = diff.lines.filter((l) => l.kind === "add" || l.kind === "ctx").map((l) => l.text).join("\n");
+  box.querySelector('[data-action="copy"]').onclick = () => copyText(newText, "Copied changed text");
+  return box;
+}
+
+function applyRunningTools() {
+  for (const el of document.querySelectorAll(".step[data-tool-id]")) {
+    const running = runningTools.has(el.dataset.toolId);
+    el.classList.toggle("running", running);
+    if (running) {
+      const out = el.querySelector(".out");
+      out.textContent = runningTools.get(el.dataset.toolId) || "…";
+      out.scrollTop = out.scrollHeight;
+    }
+  }
+}
+
+async function renderAssistant(item, { live = false } = {}) {
+  const el = document.createElement("div");
+  el.className = "turn-assistant";
+  el.appendChild(renderSteps(item));
+  if (item.text) {
+    el.classList.add("has-reply");
+    const reply = document.createElement("div");
+    reply.className = "reply";
+    el.appendChild(reply);
+    await renderMarkdown(reply, item.text, { diagrams: !live });
+    if (!live) {
+      const actions = document.createElement("div");
+      actions.className = "reply-actions";
+      actions.innerHTML = `<button class="icon-btn" title="Copy the whole reply as Markdown">${ICONS.copy}<span>Copy</span></button>`;
+      actions.querySelector("button").onclick = () => copyText(item.text, "Copied reply");
+      el.appendChild(actions);
+    }
+  }
+  if (item.error) el.insertAdjacentHTML("beforeend", `<div class="note error">${escapeHtml(item.error)}</div>`);
+  if (item.aborted) el.insertAdjacentHTML("beforeend", '<div class="note muted">Interrupted</div>');
+  return el;
+}
+
+function renderUser(item) {
+  const el = document.createElement("div");
+  el.className = "turn-user";
+  if (item.images.length) {
+    const imgs = document.createElement("div");
+    imgs.className = "user-images";
+    for (const img of item.images) {
+      const tag = document.createElement("img");
+      tag.src = `data:${img.mimeType};base64,${img.data}`;
+      tag.onclick = () => zoom(tag.src);
+      imgs.appendChild(tag);
+    }
+    el.appendChild(imgs);
+  }
+  if (item.text) {
+    const bubble = document.createElement("div");
+    bubble.className = "bubble";
+    bubble.textContent = item.text;
+    el.appendChild(bubble);
+  }
+  return el;
+
+}
+
+async function renderItem(item) {
+  switch (item.kind) {
+    case "user":
+      return renderUser(item);
+    case "assistant":
+      return renderAssistant(item);
+    case "bash": {
+      const el = document.createElement("div");
+      el.className = "card";
+      const status = item.cancelled ? "cancelled" : item.exitCode === null ? "" : `exit ${item.exitCode}`;
+      el.innerHTML = `<div class="card-head"></div><pre></pre>`;
+      el.querySelector(".card-head").textContent = `! ${item.command}   ${status}`;
+      el.querySelector("pre").textContent = item.output || "(no output)";
+      return el;
+    }
+    case "compaction":
+    case "branchSummary": {
+      const el = document.createElement("details");
+      el.innerHTML = `<summary class="divider"><span></span></summary><div class="summary-box"></div>`;
+      el.querySelector("span").textContent = item.kind === "compaction" ? "Context compacted · click to view summary" : "Branch summary · click to view";
+      await renderMarkdown(el.querySelector(".summary-box"), item.text || "(empty)");
+      return el;
+    }
+    case "custom": {
+      const el = document.createElement("div");
+      el.className = "card";
+      el.innerHTML = `<div class="card-head"></div><div class="card-body"></div>`;
+      el.querySelector(".card-head").textContent = item.title;
+      await renderMarkdown(el.querySelector(".card-body"), item.text || "");
+      return el;
+    }
+  }
+  return document.createElement("div");
+}
+
+// Re-render only from the first item whose key changed, so long threads stay cheap.
+async function syncThread() {
+  const items = await api("/api/thread");
+  const keepBottom = atBottom();
+  let same = 0;
+  while (same < rendered.length && same < items.length && rendered[same].key === items[same].key) same++;
+  for (const r of rendered.splice(same)) r.el.remove();
+  threadEl.querySelector(".empty")?.remove();
+  for (const item of items.slice(same)) {
+    const el = await renderItem(item);
+    threadEl.appendChild(el);
+    rendered.push({ key: item.key, el, item });
+  }
+  if (items.length === 0) {
+    threadEl.innerHTML = '<div class="empty"><h2>Start a conversation</h2>Type / for commands, @ for files</div>';
+  }
+  if (liveEnded) {
+    liveEl.innerHTML = "";
+    liveEnded = false;
+  }
+  applyRunningTools();
+  if (keepBottom) scrollToBottom();
+}
+
+let syncing = null;
+let syncAgain = false;
+function requestSync() {
+  if (syncing) { syncAgain = true; return syncing; }
+  syncing = (async () => {
+    try {
+      do { syncAgain = false; await syncThread(); } while (syncAgain);
+    } finally {
+      syncing = null;
+    }
+  })();
+  return syncing;
+}
+
+// Streaming assistant message, rendered below the committed thread.
+let liveItem = null;
+let liveEnded = false;
+let liveDrawing = false;
+async function drawLive() {
+  if (liveDrawing) return;
+  liveDrawing = true;
+  while (liveItem) {
+    const item = liveItem;
+    liveItem = null;
+    const keepBottom = atBottom();
+    const el = await renderAssistant(item, { live: true });
+    // Keep the user's open/closed choice on steps while the message streams.
+    const open = [...liveEl.querySelectorAll(".step")].map((s) => s.open);
+    el.querySelectorAll(".step").forEach((s, i) => { s.open = open[i] ?? s.open; });
+    liveEl.replaceChildren(el);
+    applyRunningTools();
+    if (keepBottom) scrollToBottom();
+  }
+  liveDrawing = false;
+}
+
+/* ---------- Header and state ---------- */
+
+// Same rounding as Pi's footer.
+function fmtTokens(n) {
+  if (n == null) return "?";
+  if (n < 1000) return String(n);
+  if (n < 10000) return `${(n / 1000).toFixed(1)}k`;
+  if (n < 1e6) return `${Math.round(n / 1000)}k`;
+  if (n < 1e7) return `${(n / 1e6).toFixed(1)}M`;
+  return `${Math.round(n / 1e6)}M`;
+}
+
+// Pi's terminal footer: cwd (branch) • name / usage and context / model • thinking / extension statuses.
+// An extension footer set with setFooter replaces the first two lines, as in the terminal.
+function renderFooter() {
+  const box = $("pi-footer");
+  if (!state) return;
+  const span = (text, cls = "") => `<span class="${cls}">${escapeHtml(text)}</span>`;
+  const lines = [];
+  if (chrome.customFooter) {
+    lines.push(`<div class="custom ansi">${chrome.customFooter.map(ansiHtml).join("\n")}</div>`);
+  } else {
+    let where = state.cwdDisplay;
+    if (state.gitBranch) where += ` (${state.gitBranch})`;
+    if (state.sessionName) where += ` • ${state.sessionName}`;
+    lines.push(`<div class="line">${span(where, "grow")}</div>`);
+
+    const t = state.totals;
+    const stats = [];
+    if (t.input) stats.push(`↑${fmtTokens(t.input)}`);
+    if (t.output) stats.push(`↓${fmtTokens(t.output)}`);
+    if (t.cacheRead) stats.push(`R${fmtTokens(t.cacheRead)}`);
+    if (t.cacheWrite) stats.push(`W${fmtTokens(t.cacheWrite)}`);
+    if ((t.cacheRead || t.cacheWrite) && state.cacheHitRate != null) stats.push(`CH${state.cacheHitRate.toFixed(1)}%`);
+    if (t.cost) stats.push(`$${t.cost.toFixed(3)}`);
+    const ctx = state.context;
+    const window = ctx?.contextWindow ?? state.model?.contextWindow ?? 0;
+    const auto = state.autoCompact ? " (auto)" : "";
+    const pct = ctx?.percent;
+    const ctxText = pct == null ? `?/${fmtTokens(window)}${auto}` : `${pct.toFixed(1)}%/${fmtTokens(window)}${auto}`;
+    const ctxCls = pct > 90 ? "bad" : pct > 70 ? "warn" : "";
+
+    let model = state.model?.id ?? "no-model";
+    if (state.model?.reasoning) model += state.thinkingLevel === "off" ? " • thinking off" : ` • ${state.thinkingLevel}`;
+    if (state.model && state.providerCount > 1) model = `(${state.model.provider}) ${model}`;
+    lines.push(`<div class="line"><span class="grow">${escapeHtml(stats.join(" "))}${stats.length ? " " : ""}${span(ctxText, ctxCls)}</span>${span(model, "right")}</div>`);
+  }
+  const statuses = chrome.statuses.filter((s) => s.text);
+  if (statuses.length) {
+    lines.push(`<div class="statuses">${statuses.map((s) => `<span class="ansi" title="${escapeHtml(s.key)}">${ansiHtml(s.text)}</span>`).join("")}</div>`);
+  }
+  box.innerHTML = lines.join("");
+}
+
+// Pi's terminal theme drives the accent, status, diff, link and user-message colors.
+const THEME_VARS = {
+  accent: "--accent", error: "--danger", warning: "--warn", success: "--ok", mdLink: "--link",
+  toolDiffAdded: "--diff-add", toolDiffRemoved: "--diff-del", userMessageBg: "--user-bg",
+  userMessageText: "--user-text", thinkingText: "--thinking",
+};
+let appliedTheme = "";
+function applyTheme(theme) {
+  const key = JSON.stringify(theme);
+  if (key === appliedTheme) return;
+  const changed = appliedTheme !== "";
+  appliedTheme = key;
+  const root = document.documentElement;
+  root.dataset.appearance = theme.appearance;
+  for (const [token, cssVar] of Object.entries(THEME_VARS)) root.style.setProperty(cssVar, theme.colors[token]);
+  document.getElementById("hljs-theme").href = theme.appearance === "light" ? "/vendor/hljs-light.css" : "/vendor/hljs.css";
+  setMermaidTheme(theme.appearance);
+  // Rendered Mermaid SVGs carry their theme's colors, so re-render the thread after a switch.
+  if (changed) {
+    rendered.forEach((r) => r.el.remove());
+    rendered = [];
+    requestSync();
+  }
+}
+
+function pageTitle() {
+  if (chrome.title) return chrome.title;
+  if (state.sessionName) return `${state.sessionName} · Pi TWebui`;
+  return "Pi TWebui";
+}
+
+function renderState() {
+  if (!state) return;
+  applyTheme(state.theme);
+  $("dot").className = "dot" + (state.idle ? "" : " busy");
+  $("title").textContent = state.sessionName || "Untitled session";
+  updateComposerBorder();
+  document.title = pageTitle();
+  // Same priority as Pi's status row: compaction / branch summary replace the working indicator.
+  const act = state.activity;
+  const activityText = !act ? ""
+    : act.kind === "branchSummary" ? "Summarizing branch… (Esc to cancel)"
+    : act.reason === "manual" ? "Compacting context… (Esc to cancel)"
+    : `${act.reason === "overflow" ? "Context overflow, " : ""}Auto-compacting… (Esc to cancel)`;
+  $("working").classList.toggle("show", !!act || (!state.idle && chrome.workingVisible !== false));
+  // Extensions may color the working message with ANSI codes; render them like the terminal and skip the page's own shimmer.
+  const working = $("working-text");
+  const workingMessage = activityText || chrome.workingMessage || "Working…";
+  const colored = workingMessage.includes("\x1b[");
+  working.classList.toggle("shimmer", !colored);
+  if (colored) working.innerHTML = ansiHtml(workingMessage);
+  else working.textContent = workingMessage;
+  renderQueue();
+  renderFooter();
+  updateSendButton();
+}
+
+async function refreshState() {
+  state = await api("/api/state");
+  renderState();
+  return state;
+}
+
+function setBanner(text, kind = "") {
+  $("banner").textContent = text;
+  $("banner").className = "banner" + (text ? " show" : "") + (kind ? ` ${kind}` : "");
+}
+
+/* ---------- Session commands (/resume, /tree, /fork, /model, ...) ---------- */
+
+function relTime(iso) {
+  const s = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return new Date(iso).toLocaleDateString();
+}
+
+function requireIdle() {
+  if (state.idle) return true;
+  toast("Pi is busy: interrupt it or wait until it finishes", true);
+  return false;
+}
+
+// Tree navigation and forks put the chosen user message into Pi's editor; mirror it into the composer.
+async function adoptEditorText() {
+  const s = await api("/api/state");
+  if (input.value.trim() || !s.editorText) return;
+  input.value = s.editorText;
+  onInput();
+  input.focus();
+}
+
+async function openResume() {
+  if (!requireIdle()) return;
+  let scope = "cwd";
+  const load = async () => (await api(`/api/sessions?scope=${scope}`)).map((s) => ({
+    label: s.title,
+    detail: `${relTime(s.modified)} · ${s.messageCount} msgs` + (scope === "all" ? ` · ${s.cwd}` : ""),
+    mark: s.current ? "●" : "",
+    value: s,
+  }));
+  const session = await pick({
+    title: "Resume session (current folder)",
+    items: await load(),
+    placeholder: "Search sessions",
+    hint: "↑↓ select · Enter open · Tab current folder / all · Esc cancel",
+    onKey: (e, control) => {
+      if (e.key !== "Tab") return false;
+      scope = scope === "cwd" ? "all" : "cwd";
+      load().then((items) => control.refresh(items, scope === "all" ? "Resume session (all folders)" : "Resume session (current folder)"));
+      return true;
+    },
+  });
+  if (!session || session.current) return;
+  await action({ type: "resume", path: session.path });
+}
+
+async function openTree() {
+  if (!requireIdle()) return;
+  const rows = await api("/api/tree");
+  if (!rows.length) return toast("The session is empty");
+  const leaf = [...rows].reverse().find((r) => r.onPath);
+  // Same row format as Pi's /tree: "user: ...", "assistant: ...", "[read: path]", with • on the active path.
+  const row = await pick({
+    title: "Session tree",
+    items: rows.map((r) => ({
+      label: r.text || "…",
+      detail: r.label ? `[${r.label}]` : "",
+      mark: r.onPath ? "•" : "",
+      prefix: r.kind === "user" ? "user:" : r.kind === "assistant" ? "assistant:" : "",
+      prefixClass: r.kind,
+      indent: r.depth,
+      dim: r.kind === "tool" || r.kind === "bash",
+      value: r,
+    })),
+    selected: rows.indexOf(leaf),
+    placeholder: "Search messages",
+    hint: "↑↓ select · Enter jump · Esc cancel · • marks the active path",
+  });
+  if (!row) return;
+  const summarize = await pick({
+    title: "When leaving the current branch",
+    items: [{ label: "No summary", value: false }, { label: "Summarize current branch", value: true }],
+  });
+  if (summarize === undefined) return;
+  if (await action({ type: "navigate", entryId: row.id, summarize }, summarize ? "Summarized and navigated" : "Navigated")) adoptEditorText();
+}
+async function openFork() {
+  if (!requireIdle()) return;
+  const users = rendered.filter((r) => r.item.kind === "user").map((r) => r.item).reverse();
+  if (!users.length) return toast("No user messages to fork from");
+  const item = await pick({
+    title: "Fork from a user message",
+    items: users.map((u) => ({ label: u.text.replace(/\s+/g, " ") || "(image)", value: u })),
+    placeholder: "Search messages",
+  });
+  if (!item) return;
+  if (await action({ type: "fork", entryId: item.id }, "Forked into a new session")) adoptEditorText();
+}
+
+async function openModelPicker() {
+  const models = await api("/api/models");
+  if (!models.length) return toast("No models with credentials: run /login in the terminal", true);
+  const cur = state.model;
+  const item = (m, section) => ({
+    label: m.name || m.id,
+    detail: `${m.provider}/${m.id}`,
+    mark: cur && cur.provider === m.provider && cur.id === m.id ? "✓" : "",
+    section,
+    value: m,
+  });
+  const scoped = models.filter((m) => m.scoped);
+  const items = scoped.length
+    ? [...scoped.map((m) => item(m, "Scoped")), ...models.filter((m) => !m.scoped).map((m) => item(m, "All available"))]
+    : models.map((m) => item(m));
+  const model = await pick({ title: "Select model", items, selected: Math.max(0, items.findIndex((i) => i.mark)), placeholder: "Search models" });
+  if (model) action({ type: "setModel", provider: model.provider, id: model.id }, `Switched to ${model.name || model.id}`);
+}
+
+async function openThinkingPicker() {
+  if (!state.model?.reasoning) return toast("This model does not support thinking levels", true);
+  const level = await pick({
+    title: "Thinking level",
+    items: state.thinkingLevels.map((l) => ({ label: l, mark: l === state.thinkingLevel ? "✓" : "", value: l })),
+    selected: state.thinkingLevels.indexOf(state.thinkingLevel),
+  });
+  if (level) action({ type: "setThinking", level });
+}
+
+async function setModelByName(ref) {
+  const models = await api("/api/models");
+  const q = ref.toLowerCase();
+  const m = models.find((x) => `${x.provider}/${x.id}`.toLowerCase() === q || x.id.toLowerCase() === q)
+    ?? models.find((x) => `${x.provider}/${x.id} ${x.name}`.toLowerCase().includes(q));
+  if (!m) return toast(`Model not found: ${ref}`, true);
+  action({ type: "setModel", provider: m.provider, id: m.id }, `Switched to ${m.name || m.id}`);
+}
+
+function newSession() {
+  if (requireIdle()) action({ type: "newSession" }, "New session started");
+}
+
+async function cycleThinking() {
+  const result = await action({ type: "cycleThinking" });
+  if (result) toast(`Thinking level: ${result.level}`);
+}
+
+async function cycleModel(direction) {
+  const result = await action({ type: "cycleModel", direction });
+  if (result) toast(`Switched to ${result.name}`);
+}
+
+// Pi's Ctrl+O: expand or collapse every tool call at once; new ones follow the current choice.
+function toggleTools() {
+  toolsExpanded = !toolsExpanded;
+  document.querySelectorAll(".step[data-tool-id]").forEach((s) => { s.open = toolsExpanded; });
+  toast(toolsExpanded ? "Tool output expanded" : "Tool output collapsed");
+}
+
+function toggleThinking() {
+  hideThinking = !hideThinking;
+  document.body.classList.toggle("hide-thinking", hideThinking);
+  toast(hideThinking ? "Thinking hidden" : "Thinking shown");
+}
+
+// Pi's copy key: the selection when there is one, otherwise the last reply.
+function copyLastReply() {
+  const selection = String(window.getSelection());
+  if (selection) return copyText(selection, "Copied selection");
+  const text = lastReplyText();
+  text ? copyText(text, "Copied last reply") : toast("No reply yet", true);
+}
+
+function lastReplyText() {
+  return [...rendered].reverse().find((r) => r.item.kind === "assistant" && r.item.text)?.item.text;
+}
+
+function showSessionInfo() {
+  const t = state.totals;
+  const ctx = state.context;
+  const rows = [
+    ["Session", state.sessionName || "(unnamed)"],
+    ["File", state.sessionFile || "(not saved)"],
+    ["ID", state.sessionId],
+    ["Directory", state.cwd],
+    ["Model", state.model ? `${state.model.provider}/${state.model.id}` : "-"],
+    ["Thinking", state.thinkingLevel],
+    ["Context", ctx ? `${fmtTokens(ctx.tokens)} / ${fmtTokens(ctx.contextWindow)}${ctx.percent == null ? "" : ` (${Math.round(ctx.percent)}%)`}` : "-"],
+    ["Token", `in ${fmtTokens(t.input)} · out ${fmtTokens(t.output)} · cache read ${fmtTokens(t.cacheRead)} · cache write ${fmtTokens(t.cacheWrite)}`],
+    ["Cost", `$${t.cost.toFixed(4)}`],
+    ["Entries", String(state.entries)],
+  ];
+  modal({ title: "Session info", html: `<dl class="kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${escapeHtml(v)}</dd>`).join("")}</dl>`, ok: "Close" });
+}
+
+/* ---------- Keybindings (Pi's effective keybindings) ---------- */
+
+const KEY_NAMES = {
+  escape: "escape", esc: "escape", enter: "enter", return: "enter", tab: "tab", space: " ", up: "arrowup", down: "arrowdown",
+  left: "arrowleft", right: "arrowright", backspace: "backspace", delete: "delete", home: "home", end: "end", pageup: "pageup", pagedown: "pagedown",
+};
+
+function matches(e, id) {
+  return (keys[id] ?? []).some((spec) => {
+    const parts = spec.toLowerCase().split("+");
+    const key = parts.pop();
+    const mods = { ctrl: parts.includes("ctrl"), alt: parts.includes("alt"), shift: parts.includes("shift"), meta: parts.includes("super") };
+    if (e.ctrlKey !== mods.ctrl || e.altKey !== mods.alt || e.shiftKey !== mods.shift || e.metaKey !== mods.meta) return false;
+    return e.key.toLowerCase() === (KEY_NAMES[key] ?? key) || (/^[a-z]$/.test(key) && e.code === `Key${key.toUpperCase()}`);
+  });
+}
+
+const formatKey = (spec) => spec.split("+").map((p) => p.length === 1 ? p.toUpperCase() : p[0].toUpperCase() + p.slice(1)).join("+");
+const keysOf = (id) => (keys[id] ?? []).map(formatKey).join(" / ");
+
+function showHotkeys() {
+  const rows = [
+    ["Send (steers while Pi is running)", "Enter"],
+    ["New line", "Shift+Enter"],
+    ["Queue follow-up (sent after the run)", keysOf("app.message.followUp")],
+    ["Interrupt", keysOf("app.interrupt")],
+    ["Cut / copy / paste in the editor", "Ctrl+X / Ctrl+C / Ctrl+V"],
+    ["Cycle thinking level", keysOf("app.thinking.cycle")],
+    ["Select model", keysOf("app.model.select")],
+    ["Copy selection / last reply", keysOf("app.message.copy")],
+    ["Cycle model", [keysOf("app.model.cycleForward"), keysOf("app.model.cycleBackward")].filter(Boolean).join("  · backward ")],
+    ["Expand / collapse tool output", keysOf("app.tools.expand")],
+    ["Show / hide thinking", keysOf("app.thinking.toggle")],
+    ["Put text into Pi terminal editor", "Ctrl+Shift+Enter"],
+    ["New session / tree / fork / resume", ["app.session.new", "app.session.tree", "app.session.fork", "app.session.resume"].map((id) => keysOf(id) || "—").join(" / ")],
+  ];
+  modal({
+    title: "Keyboard shortcuts",
+    message: "Same as your Pi keybindings. Browser-reserved combos (for example Ctrl+T) may be taken by the browser first.",
+    html: `<dl class="kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${escapeHtml(v || "—")}</dd>`).join("")}</dl>`,
+    ok: "Close",
+  });
+}
+
+/* ---------- Slash commands ---------- */
+
+// Built-in Pi commands are handled by the page because Pi only runs them from its own editor.
+const BUILTINS = [
+  { name: "new", description: "Start a new session", run: newSession },
+  { name: "clone", description: "Duplicate the current branch into a new session", run: () => action({ type: "clone" }, "Cloned into a new session") },
+  { name: "compact", args: "[instructions]", description: "Manually compact the session context", run: (args) => action({ type: "compact", instructions: args }) },
+  { name: "model", args: "[provider/model]", description: "Select model", run: (args) => (args ? setModelByName(args) : openModelPicker()) },
+  { name: "thinking", args: "[level]", description: "Set thinking level", run: (args) => (args ? action({ type: "setThinking", level: args }) : openThinkingPicker()) },
+  {
+    name: "name", args: "[name]", description: "Set the session name",
+    run: (args) => (args ? action({ type: "rename", name: args }, "Renamed") : toast(state.sessionName ? `Session name: ${state.sessionName}` : "The session has no name")),
+  },
+  { name: "session", description: "Show session info and stats", run: showSessionInfo },
+  { name: "tree", description: "Navigate the session tree", run: openTree },
+  { name: "fork", description: "Create a new fork from a previous user message", run: openFork },
+  { name: "resume", description: "Resume a different session", run: openResume },
+  { name: "copy", description: "Copy the last assistant message", run: () => { const t = lastReplyText(); t ? copyText(t, "Copied") : toast("No reply yet", true); } },
+  { name: "hotkeys", description: "Show keyboard shortcuts", run: showHotkeys },
+  { name: "reload", description: "Reload keybindings, extensions, skills, prompts, and themes", run: () => action({ type: "reload" }, "Reloaded") },
+  { name: "quit", description: "Quit Pi", run: () => action({ type: "quit" }) },
+];
+// Built-ins with terminal-only interfaces; the page points to the terminal instead.
+const TERMINAL_ONLY = ["settings", "scoped-models", "login", "logout", "export", "import", "share", "bug", "changelog", "trust"];
+
+async function loadCommands() {
+  const ext = await api("/api/commands");
+  const sourceLabel = { extension: "extension", prompt: "prompt", skill: "skill" };
+  commands = [
+    ...BUILTINS.map((c) => ({ name: c.name, args: c.args, description: c.description, source: "built-in" })),
+    ...TERMINAL_ONLY.map((name) => ({ name, description: "Terminal only", source: "terminal" })),
+    ...ext.map((c) => ({ name: c.name, description: c.description, source: sourceLabel[c.source] ?? c.source })),
+  ];
+}
+/* ---------- Autocomplete ---------- */
+
+let completion = null; // { options: [{ key, desc, side, insert }], index, start, end }
+
+function closeCompletion() {
+  completion = null;
+  $("complete").classList.remove("show");
+}
+
+function drawCompletion() {
+  const box = $("complete");
+  if (!completion || completion.options.length === 0) return closeCompletion();
+  box.innerHTML = "";
+  completion.options.forEach((o, i) => {
+    const row = document.createElement("div");
+    row.className = "opt" + (i === completion.index ? " on" : "");
+    row.innerHTML = '<span class="k"></span><span class="d"></span><span class="s"></span>';
+    row.children[0].textContent = o.key;
+    row.children[1].textContent = o.desc ?? "";
+    row.children[2].textContent = o.side ?? "";
+    row.onmousedown = (e) => { e.preventDefault(); acceptCompletion(i); };
+    box.appendChild(row);
+  });
+  box.classList.add("show");
+  box.children[completion.index]?.scrollIntoView({ block: "nearest" });
+}
+
+function acceptCompletion(i = completion.index) {
+  const o = completion.options[i];
+  input.setRangeText(o.insert, completion.start, completion.end, "end");
+  closeCompletion();
+  onInput();
+}
+
+// Moving the selection fills the candidate into the input right away (commands and @ files alike);
+// the list keeps its original filter so the user can keep moving.
+function previewCompletion() {
+  const o = completion.options[completion.index];
+  input.setRangeText(o.insert, completion.start, completion.end, "end");
+  completion.end = completion.start + o.insert.length;
+  localStorage.setItem(DRAFT_KEY, input.value);
+  autoGrow();
+  updateSendButton();
+}
+let fileQuery = 0;
+async function updateCompletion() {
+  const before = input.value.slice(0, input.selectionStart);
+  // Slash commands only complete when the whole input is the command word.
+  const slash = /^\/(\S*)$/.exec(input.value);
+  if (slash && before === input.value) {
+    const q = slash[1].toLowerCase();
+    const options = commands
+      .filter((c) => c.name.toLowerCase().includes(q))
+      .sort((a, b) => Number(!a.name.toLowerCase().startsWith(q)) - Number(!b.name.toLowerCase().startsWith(q)))
+      .slice(0, 40)
+      .map((c) => ({ key: `/${c.name}${c.args ? ` ${c.args}` : ""}`, desc: c.description, side: c.source, insert: `/${c.name} ` }));
+    completion = { options, index: 0, start: 0, end: before.length };
+    return drawCompletion();
+  }
+  const at = /(^|\s)@([^\s@]*)$/.exec(before);
+  if (at) {
+    const id = ++fileQuery;
+    const files = await api(`/api/files?q=${encodeURIComponent(at[2])}`);
+    if (id !== fileQuery) return;
+    const start = before.length - at[2].length - 1;
+    completion = {
+      options: files.map((f) => ({ key: f, side: f.endsWith("/") ? "folder" : "", insert: f.endsWith("/") ? `@${f}` : `@${f} ` })),
+      index: 0,
+      start,
+      end: before.length,
+    };
+    return drawCompletion();
+  }
+  closeCompletion();
+}
+
+/* ---------- Composer ---------- */
+
+function autoGrow() {
+  input.style.height = "auto";
+  input.style.height = `${input.scrollHeight}px`;
+}
+
+function updateSendButton() {
+  const empty = !input.value.trim();
+  const send = $("send");
+  const stopMode = empty && state && !state.idle;
+  send.classList.toggle("stop", !!stopMode);
+  send.innerHTML = stopMode ? ICONS.stop : ICONS.arrowUp;
+  send.title = stopMode ? "Interrupt Pi (Esc)" : "Send (Enter)";
+  send.disabled = !connected || (empty && !stopMode);
+}
+
+// Like Pi's editor border: the thinking level's color, or the bash-mode color for "!" input.
+function updateComposerBorder() {
+  if (!state) return;
+  const level = state.model?.reasoning ? state.thinkingLevel : "off";
+  const token = input.value.trimStart().startsWith("!") ? "bashMode" : `thinking${level[0].toUpperCase()}${level.slice(1)}`;
+  composer.style.setProperty("--edge", state.theme.colors[token] ?? "");
+}
+
+function onInput() {
+  updateComposerBorder();
+  localStorage.setItem(DRAFT_KEY, input.value);
+  autoGrow();
+  updateSendButton();
+  renderAttachments();
+  updateCompletion().catch(() => closeCompletion());
+}
+
+function readAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",")[1]);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+// Previews follow the text: a thumbnail stays only while its path is still in the input.
+function renderAttachments() {
+  const box = $("attachments");
+  box.innerHTML = "";
+  for (const att of attachments) {
+    if (!input.value.includes(att.path)) continue;
+    const thumb = document.createElement("div");
+    thumb.className = "thumb";
+    thumb.title = att.path;
+    thumb.innerHTML = `<img alt=""><button title="Remove">${ICONS.x}</button>`;
+    thumb.querySelector("img").src = att.src;
+    thumb.querySelector("img").onclick = () => zoom(att.src);
+    thumb.querySelector("button").onclick = () => {
+      input.value = input.value.replace(att.path, "").replace(/ {2,}/g, " ").trim();
+      onInput();
+    };
+    box.appendChild(thumb);
+  }
+}
+
+// Insert like Pi's editor: at the cursor, with a space on either side when it would touch other text.
+function insertAtCursor(text) {
+  const { selectionStart: start, selectionEnd: end, value } = input;
+  const lead = start > 0 && !/\s/.test(value[start - 1]) ? " " : "";
+  const trail = end < value.length && !/\s/.test(value[end]) ? " " : "";
+  input.setRangeText(`${lead}${text}${trail}`, start, end, "end");
+  onInput();
+}
+
+async function addFiles(files) {
+  for (const file of files) {
+    if (!file.type.startsWith("image/")) {
+      toast(`Skipped non-image file: ${file.name}`, true);
+      continue;
+    }
+    try {
+      const data = await readAsBase64(file);
+      const { path } = await api("/api/paste-image", { data, mimeType: file.type });
+      attachments.push({ path, src: `data:${file.type};base64,${data}` });
+      insertAtCursor(path);
+    } catch (error) {
+      toast(`Image paste failed: ${error.message}`, true);
+    }
+  }
+  input.focus();
+}
+function clearComposer() {
+  localStorage.removeItem(DRAFT_KEY);
+  input.value = "";
+  attachments.length = 0;
+  onInput();
+}
+
+// deliverAs applies while Pi is running: Enter steers, Pi's follow-up key queues for after the run.
+async function submit(kind, deliverAs = "steer") {
+  const text = input.value.trim();
+  if (kind === "fill") {
+    if (!text) return toast("Nothing to send", true);
+  } else if (!text) {
+    return;
+  }
+
+  if (kind === "send" && text.startsWith("/")) {
+    const [, name, args] = /^\/(\S+)\s*([\s\S]*)$/.exec(text);
+    const builtin = BUILTINS.find((c) => c.name === name);
+    if (builtin) {
+      clearComposer();
+      return builtin.run(args.trim());
+    }
+    if (TERMINAL_ONLY.includes(name)) return toast(`/${name} has a terminal-only UI: run it in the Pi terminal`, true);
+  }
+  if (kind === "send" && text.startsWith("!")) return toast("! shell mode is only available in the Pi terminal", true);
+
+  try {
+    await api("/api/submit", { action: kind, text, deliverAs });
+  } catch (error) {
+    return toast(`Submit failed: ${error.message}`, true);
+  }
+  clearComposer();
+  toast(kind === "send" ? (state.idle ? "Sent" : deliverAs === "steer" ? "Steering message sent" : "Queued") : "Put into the Pi terminal editor");
+  if (kind === "send") setTimeout(scrollToBottom, 50);
+}
+
+async function abort() {
+  await action({ type: "abort" }, "Interrupt requested");
+}
+
+input.addEventListener("input", onInput);
+input.addEventListener("click", () => updateCompletion().catch(() => closeCompletion()));
+input.addEventListener("blur", () => setTimeout(closeCompletion, 120));
+input.addEventListener("paste", (e) => {
+  const files = [...e.clipboardData.files].filter((f) => f.type.startsWith("image/"));
+  if (files.length === 0) return;
+  e.preventDefault();
+  addFiles(files);
+});
+input.addEventListener("keydown", (e) => {
+  if (e.isComposing) return;
+  if (completion) {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const n = completion.options.length;
+      completion.index = (completion.index + (e.key === "ArrowDown" ? 1 : n - 1)) % n;
+      previewCompletion();
+      return drawCompletion();
+    }
+    if (e.key === "Tab") {
+      e.preventDefault();
+      return acceptCompletion();
+    }
+    if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.altKey) {
+      e.preventDefault();
+      // The selection is already filled in, so Enter sends, for commands and @ files alike; Tab only completes.
+      acceptCompletion();
+      submit("send");
+      return;
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      return closeCompletion();
+    }
+  }
+  if (e.key === "Enter" && e.ctrlKey && e.shiftKey) {
+    e.preventDefault();
+    submit("fill");
+  } else if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.altKey) {
+    e.preventDefault();
+    submit("send");
+  } else if (e.key === "Tab" && !e.shiftKey && !e.ctrlKey && !e.altKey) {
+    e.preventDefault();
+    input.setRangeText("  ", input.selectionStart, input.selectionEnd, "end");
+    onInput();
+  }
+});
+composer.addEventListener("dragover", (e) => { e.preventDefault(); composer.classList.add("dragging"); });
+composer.addEventListener("dragleave", (e) => { if (!composer.contains(e.relatedTarget)) composer.classList.remove("dragging"); });
+composer.addEventListener("drop", (e) => {
+  e.preventDefault();
+  composer.classList.remove("dragging");
+  addFiles([...e.dataTransfer.files]);
+});
+
+/* ---------- Wiring ---------- */
+
+$("fill").innerHTML = `${ICONS.insert}<span>Fill</span>`;
+$("fill").onclick = () => submit("fill");
+$("send").onclick = () => ($("send").classList.contains("stop") ? abort() : submit("send"));
+
+// Pi's app keybindings, read from its effective configuration.
+document.addEventListener("keydown", (e) => {
+  // A handler that already used the key (overlay or autocomplete closing on Esc) must not also interrupt Pi.
+  if (e.isComposing || e.defaultPrevented || document.querySelector("dialog[open]")) return;
+  // In a text field, Ctrl/Cmd+C, X and V are always copy, cut and paste, whatever Pi binds to them.
+  if (e.target.matches?.("textarea, input") && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && ["c", "x", "v"].includes(e.key.toLowerCase())) return;
+  if (matches(e, "app.interrupt")) {
+    // While an extension dialog is waiting for an answer, Esc must not interrupt the run behind it.
+    if (!dialogs.length && state && !state.idle) {
+      e.preventDefault();
+      abort();
+    }
+    return;
+  }
+
+  const handlers = [
+    ["app.message.followUp", () => submit("send", "followUp")],
+    ["app.thinking.cycle", cycleThinking],
+    ["app.model.cycleForward", () => cycleModel("forward")],
+    ["app.model.cycleBackward", () => cycleModel("backward")],
+    ["app.model.select", openModelPicker],
+    ["app.message.copy", copyLastReply],
+    ["app.tools.expand", toggleTools],
+    ["app.thinking.toggle", toggleThinking],
+    ["app.message.dequeue", () => toast(`Queued messages can only be restored in the Pi terminal (${keysOf("app.message.dequeue")})`)],
+    ["app.session.new", newSession],
+    ["app.session.tree", openTree],
+    ["app.session.fork", openFork],
+    ["app.session.resume", openResume],
+  ];
+  const hit = handlers.find(([id]) => matches(e, id));
+  if (!hit) return;
+  e.preventDefault();
+  hit[1]();
+});
+/* ---------- Extension UI mirrored from the terminal ---------- */
+
+const ansi = new AnsiUp();
+const ansiHtml = (text) => ansi.ansi_to_html(text);
+
+let chrome = { widgets: [], statuses: [], customFooter: null, customHeader: null, workingVisible: true, title: "", workingMessage: "" };
+// Pi's pending-messages area: queued steering and follow-up input above the editor.
+function renderQueue() {
+  const q = state.queue;
+  const rows = [
+    ...q.steering.map((t) => `<div class="q"><b>Steer</b>${escapeHtml(t)}</div>`),
+    ...q.followUp.map((t) => `<div class="q"><b>Queued</b>${escapeHtml(t)}</div>`),
+  ];
+  $("queue").innerHTML = rows.length ? rows.join("") + '<div class="hint">Restore queued messages in the Pi terminal</div>' : "";
+}
+
+function renderChrome() {
+  $("ext-header").innerHTML = chrome.customHeader
+    ? `<div class="widget ansi">${chrome.customHeader.map(ansiHtml).join("\n")}</div>`
+    : "";
+  for (const placement of ["aboveEditor", "belowEditor"]) {
+    const box = $(placement === "aboveEditor" ? "widgets-above" : "widgets-below");
+    box.innerHTML = "";
+    for (const w of chrome.widgets.filter((x) => x.placement === placement && x.lines.length)) {
+      const el = document.createElement("div");
+      el.className = "widget ansi";
+      el.title = w.key;
+      el.innerHTML = w.lines.map(ansiHtml).join("\n");
+      box.appendChild(el);
+    }
+  }
+  if (state) renderState();
+}
+
+let dialogs = [];
+let dialogTimer;
+function buildDialog(d) {
+  const el = document.createElement("div");
+  el.className = "ext-dialog";
+  el.dataset.id = d.id;
+  el.innerHTML = '<h4></h4><div class="msg"></div>';
+  // Pi's confirm and select put extra detail after the first title line.
+  const [heading, ...rest] = d.title.split("\n");
+  const message = d.kind === "confirm" ? d.message : rest.join("\n");
+  el.querySelector("h4").textContent = heading;
+  el.querySelector(".msg").textContent = message;
+  el.querySelector(".msg").hidden = !message;
+  const send = (value) => api("/api/dialog", { id: d.id, value }).catch((e) => toast(e.message, true));
+  const row = document.createElement("div");
+  row.className = "row";
+  row.innerHTML = '<span class="count"></span>';
+  const button = (label, cls, onClick) => {
+    const b = document.createElement("button");
+    b.className = `btn ${cls}`;
+    b.textContent = label;
+    b.onclick = onClick;
+    row.appendChild(b);
+  };
+  if (d.kind === "select" || d.kind === "confirm") {
+    const opts = document.createElement("div");
+    opts.className = "opts";
+    const choices = d.kind === "select" ? d.options : ["Yes", "No"];
+    choices.forEach((label, i) => {
+      const b = document.createElement("button");
+      b.textContent = label;
+      b.onclick = () => send(d.kind === "select" ? label : i === 0);
+      opts.appendChild(b);
+    });
+    el.appendChild(opts);
+    button("Cancel", "", () => send(d.kind === "select" ? undefined : false));
+  } else if (d.kind === "input") {
+    const field = document.createElement("textarea");
+    field.rows = 1;
+    field.placeholder = d.placeholder;
+    field.onkeydown = (e) => {
+      if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(field.value); }
+    };
+    el.appendChild(field);
+    button("Cancel", "", () => send(undefined));
+    button("OK", "primary", () => send(field.value));
+  } else {
+    const note = document.createElement("div");
+    note.className = "msg";
+    note.textContent = "The multi-line editor dialog can only be completed in the Pi terminal." + (d.prefill ? `\n\nInitial content:\n${d.prefill}` : "");
+    el.appendChild(note);
+  }
+  el.appendChild(row);
+  return el;
+}
+
+function renderDialogs() {
+  const box = $("ext-dialogs");
+  // Keep existing dialog DOM (and anything typed into it); only add new and drop finished ones.
+  for (const el of [...box.children]) if (!dialogs.some((d) => d.id === el.dataset.id)) el.remove();
+  const shown = new Set([...box.children].map((el) => el.dataset.id));
+  for (const d of dialogs.filter((x) => !shown.has(x.id))) {
+    const el = buildDialog(d);
+    box.appendChild(el);
+    (el.querySelector("textarea") ?? el.querySelector(".opts button"))?.focus();
+  }
+  clearInterval(dialogTimer);
+  const tick = () => {
+    for (const d of dialogs.filter((x) => x.deadline)) {
+      const count = box.querySelector(`[data-id="${d.id}"] .count`);
+      count.textContent = `${Math.max(0, Math.ceil((d.deadline - Date.now()) / 1000))} seconds until auto-cancel`;
+    }
+  };
+  if (dialogs.some((d) => d.deadline)) {
+    tick();
+    dialogTimer = setInterval(tick, 500);
+  }
+}
+
+async function loadUI() {
+  const ui = await api("/api/ui");
+  chrome = ui.chrome;
+  dialogs = ui.dialogs;
+  $("ext-dialogs").innerHTML = "";
+  renderChrome();
+  renderDialogs();
+}
+
+/* ---------- Live connection ---------- */
+
+async function resync() {
+  await Promise.all([refreshState(), loadCommands(), loadUI()]);
+  await requestSync();
+}
+
+function setConnected(on) {
+  if (connected === on) return;
+  connected = on;
+  if (!on) {
+    $("dot").className = "dot offline";
+    setBanner("Disconnected from Pi, reconnecting… If Pi has exited, restart it and press Alt+G", "error");
+  } else {
+    setBanner("");
+  }
+  updateSendButton();
+}
+
+function connect() {
+  const events = new EventSource(`/api/events?token=${encodeURIComponent(TOKEN)}`);
+  events.onopen = () => {
+    setConnected(true);
+    resync().catch((e) => toast(e.message, true));
+  };
+  events.onerror = () => setConnected(false);
+  events.onmessage = (e) => {
+    const ev = JSON.parse(e.data);
+    switch (ev.type) {
+      case "state": {
+        // Entries written outside message events (bash, model changes, labels) still resync.
+        const changed = state && state.entries !== ev.state.entries;
+        state = ev.state;
+        renderState();
+        if (changed) requestSync();
+        break;
+      }
+      case "thread":
+        requestSync();
+        break;
+      case "live":
+        liveEnded = false;
+        liveItem = ev.item;
+        drawLive();
+        break;
+      case "live-end":
+        liveEnded = true;
+        break;
+      case "tool":
+        if (ev.running) runningTools.set(ev.id, ev.output);
+        else runningTools.delete(ev.id);
+        applyRunningTools();
+        break;
+      case "compact":
+        setBanner("");
+        toast(ev.ok ? "Context compacted" : `Compaction failed: ${ev.error}`, !ev.ok);
+        break;
+      case "switching":
+        setBanner("Pi is switching sessions / reloading…");
+        break;
+      case "session":
+        if (ev.reload) return location.reload();
+        setBanner("");
+        rendered.forEach((r) => r.el.remove());
+        rendered = [];
+        liveEl.innerHTML = "";
+        runningTools.clear();
+        resync().catch((err) => toast(err.message, true));
+        break;
+      case "chrome":
+        chrome = ev.chrome;
+        renderChrome();
+        break;
+      case "dialogs":
+        dialogs = ev.dialogs;
+        renderDialogs();
+        break;
+      case "notify":
+        toast(ev.message.replace(/\x1b\[[0-9;]*m/g, ""), ev.level === "error");
+        break;
+      case "ui-prompt":
+        setBanner(ev.active ? "An extension UI is waiting in the Pi terminal" : "");
+        break;
+    }
+  };
+}
+
+/* ---------- Boot ---------- */
+
+await refreshState();
+await loadCommands();
+await loadUI();
+keys = await api("/api/keys");
+hideThinking = state.hideThinking;
+document.body.classList.toggle("hide-thinking", hideThinking);
+await requestSync();
+// Pi's current editor text wins over a stale local draft.
+input.value = state.editorText || localStorage.getItem(DRAFT_KEY) || "";
+autoGrow();
+updateSendButton();
+scrollToBottom();
+input.focus();
+input.setSelectionRange(input.value.length, input.value.length);
+connect();
+</script>
+</body>
+</html>

@@ -1,0 +1,1 @@
+{"name":"pi-twebui","private":true,"type":"module","dependencies":{"@highlightjs/cdn-assets":"^11.12.0","ansi_up":"^6.0.6","katex":"^0.19.0","markdown-it":"^15.0.2","markdown-it-footnote":"^4.0.0","markdown-it-task-lists":"^2.1.1","markdown-it-texmath":"^1.0.0","mermaid":"^12.2.0"}}
