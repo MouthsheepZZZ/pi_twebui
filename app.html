@@ -327,6 +327,15 @@ const DRAFT_KEY = "pi-compose-draft";
 const TOPMOST_KEY = "pi-twebui-topmost";
 const TOKEN = new URLSearchParams(location.search).get("token");
 
+// A closed overlay must not leave focus on the page body. Wait a frame so a dialog
+// that opens immediately afterwards keeps the focus it just took.
+function focusComposer() {
+  requestAnimationFrame(() => {
+    if (document.querySelector("dialog[open]") || $("ext-dialogs").children.length) return;
+    input.focus();
+  });
+}
+
 
 // Pasted images live as temp files referenced by path in the text; this keeps their previews while the path is in the text.
 const attachments = [];
@@ -360,6 +369,7 @@ function zoom(src) {
   $("zoom").showModal();
 }
 $("zoom").onclick = () => $("zoom").close();
+$("zoom").onclose = () => focusComposer();
 
 /* ---------- Selector overlay and modal ---------- */
 
@@ -382,6 +392,7 @@ function pick({ title, items, selected = 0, placeholder = "Type to filter", hint
       if (done) return;
       done = true;
       if (dialog.open) dialog.close();
+      focusComposer();
       resolve(value);
     };
     const highlight = () => {
@@ -472,6 +483,7 @@ function modal({ title, message = "", input: withInput = false, value = "", plac
   if (field) { field.focus(); field.select(); }
   return new Promise((resolve) => {
     dialog.onclose = () => {
+      focusComposer();
       if (dialog.returnValue !== "ok") return resolve(null);
       resolve(field ? field.value.trim() : true);
     };
@@ -1664,6 +1676,7 @@ function buildDialog(d) {
 
 function renderDialogs() {
   const box = $("ext-dialogs");
+  const hadDialog = box.children.length > 0;
   // Keep existing dialog DOM (and anything typed into it); only add new and drop finished ones.
   for (const el of [...box.children]) if (!dialogs.some((d) => d.id === el.dataset.id)) el.remove();
   const shown = new Set([...box.children].map((el) => el.dataset.id));
@@ -1683,15 +1696,18 @@ function renderDialogs() {
     tick();
     dialogTimer = setInterval(tick, 500);
   }
+  if (hadDialog && box.children.length === 0) focusComposer();
 }
 
 async function loadUI() {
+  const hadDialog = $("ext-dialogs").children.length > 0;
   const ui = await api("/api/ui");
   chrome = ui.chrome;
   dialogs = ui.dialogs;
   $("ext-dialogs").innerHTML = "";
   renderChrome();
   renderDialogs();
+  if (hadDialog && !$("ext-dialogs").children.length) focusComposer();
 }
 
 /* ---------- Live connection ---------- */
