@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { createReadStream, existsSync, statSync } from "node:fs";
 import { readdir, readFile, writeFile } from "node:fs/promises";
@@ -93,6 +93,11 @@ interface Host {
 	handler?: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
 	// Chrome window pinned by the title-bar button. Survives page reloads in the same process.
 	topmostHwnd?: string;
+	// Last Chrome window we put in the foreground, and the helper that does it.
+	focusHwnd?: string;
+	focusHelper?: ChildProcess;
+	focusStdout?: string;
+	focusWaiters?: Array<{ settled?: boolean; resolve: (hwnd: string) => void }>;
 }
 const HOST_KEY = Symbol.for("pi-twebui.host");
 const globals = globalThis as typeof globalThis & { [HOST_KEY]?: Host };
@@ -571,6 +576,80 @@ function applyWindowTopmost(title: string, enabled: boolean, pageHost: string, s
 	});
 }
 
+// A long-lived PowerShell so putting the window back in front does not pay process startup.
+// Listeners stay on the process across /reload; the host object is process-wide.
+function ensureFocusHelper() {
+	if (process.platform !== "win32") return;
+	const current = host.focusHelper;
+	if (current && current.exitCode === null && !current.killed) return;
+	const child = spawn(
+		"powershell.exe",
+		["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", join(ROOT, "focus-window.ps1")],
+		{ windowsHide: true, stdio: ["pipe", "pipe", "pipe"] },
+	);
+	host.focusHelper = child;
+	host.focusStdout = "";
+	host.focusWaiters = [];
+	child.stdout?.setEncoding("utf8");
+	child.stdout?.on("data", (chunk: string) => {
+		if (host.focusHelper !== child) return;
+		host.focusStdout = (host.focusStdout ?? "") + chunk;
+		let nl = host.focusStdout.indexOf("\n");
+		while (nl >= 0) {
+			const line = host.focusStdout.slice(0, nl).trim();
+			host.focusStdout = host.focusStdout.slice(nl + 1);
+			nl = host.focusStdout.indexOf("\n");
+			if (!line) continue;
+			const waiter = host.focusWaiters?.shift();
+			if (!waiter || waiter.settled) continue;
+			waiter.settled = true;
+			waiter.resolve(line.startsWith("ok ") ? line.slice(3).trim() : "");
+		}
+	});
+	child.on("exit", () => {
+		if (host.focusHelper !== child) return;
+		host.focusHelper = undefined;
+		const waiters = host.focusWaiters ?? [];
+		host.focusWaiters = [];
+		for (const waiter of waiters) {
+			if (waiter.settled) continue;
+			waiter.settled = true;
+			waiter.resolve("");
+		}
+	});
+}
+
+function focusPageWindow(title: string, pageHost: string): Promise<string> {
+	if (process.platform !== "win32") return Promise.resolve("");
+	ensureFocusHelper();
+	const child = host.focusHelper;
+	if (!child?.stdin) return Promise.resolve("");
+	return new Promise((resolve) => {
+		const waiters = (host.focusWaiters ??= []);
+		const waiter = {
+			settled: false,
+			resolve: (hwnd: string) => {
+				clearTimeout(timer);
+				if (/^\d+$/.test(hwnd)) host.focusHwnd = hwnd;
+				resolve(hwnd);
+			},
+		};
+		const timer = setTimeout(() => {
+			if (waiter.settled) return;
+			waiter.settled = true;
+			resolve("");
+		}, 4000);
+		waiters.push(waiter);
+		child.stdin.write(
+			`${JSON.stringify({
+				title: Buffer.from(title, "utf8").toString("base64"),
+				host: pageHost,
+				hwnd: host.focusHwnd ?? host.topmostHwnd ?? "",
+			})}\n`,
+		);
+	});
+}
+
 async function readJson<T>(req: IncomingMessage): Promise<T> {
 	const chunks: Buffer[] = [];
 	let size = 0;
@@ -646,6 +725,8 @@ function closeServer() {
 	host.server?.closeAllConnections();
 	host.server = undefined;
 	host.baseUrl = undefined;
+	host.focusHelper?.kill();
+	host.focusHelper = undefined;
 }
 
 /* ---------- Requests from the page ---------- */
@@ -678,6 +759,7 @@ type UI = ExtensionContext["ui"];
 type Placement = "aboveEditor" | "belowEditor";
 interface RenderableComponent {
 	render(width: number): string[];
+	handleInput?(data: string): void;
 }
 interface Widget {
 	placement: Placement;
@@ -710,6 +792,9 @@ class UIMirror {
 	workingVisible = true;
 	private componentTimer?: ReturnType<typeof setInterval>;
 	private lastFrame = "";
+	private customView?: RenderableComponent;
+	private customTimer?: ReturnType<typeof setInterval>;
+	private lastCustom = "";
 
 	constructor(private readonly onChange: (event: Record<string, unknown>) => void) {}
 
@@ -787,6 +872,32 @@ class UIMirror {
 		// Pi's terminal editor dialog cannot be closed from outside, so the page only shows it.
 		target.editor = (title: string, prefill?: string) =>
 			this.track({ kind: "editor", title, prefill: prefill ?? "" }, original.editor(title, prefill));
+		// /mcp and other terminal screens. The terminal still owns the component; the page
+		// renders the same instance and forwards keys into it. Nothing is added to the prompt.
+		target.custom = ((factory, options) => {
+			const wrapped: typeof factory = (tui, theme, keybindings, done) => {
+				const created = factory(tui, theme, keybindings, (result) => {
+					this.clearCustom();
+					done(result);
+				});
+				const attach = (component: RenderableComponent | undefined) => {
+					if (!component || typeof component.render !== "function") return;
+					this.customView = component;
+					if (!this.customTimer) {
+						this.customTimer = setInterval(() => this.emitCustom(), 100);
+						this.customTimer.unref();
+					}
+					this.emitCustom(true);
+				};
+				if (created && typeof (created as Promise<RenderableComponent>).then === "function") {
+					void Promise.resolve(created as Promise<RenderableComponent>).then(attach);
+				} else {
+					attach(created as RenderableComponent);
+				}
+				return created;
+			};
+			return Promise.resolve(original.custom(wrapped, options)).finally(() => this.clearCustom());
+		}) as UI["custom"];
 	}
 
 	private setWidget(key: string, widget: Widget | undefined) {
@@ -872,6 +983,40 @@ class UIMirror {
 		return [...this.dialogs.values()].map(({ id, spec, deadline }) => ({ id, ...spec, deadline }));
 	}
 
+	customSnapshot() {
+		if (!this.customView) return { open: false, lines: [] as string[] };
+		let lines: string[] = [];
+		try {
+			lines = this.customView.render(COMPONENT_WIDTH).slice(0, 80);
+		} catch {
+			lines = [];
+		}
+		return { open: true, lines };
+	}
+
+	sendCustomKey(data: string) {
+		if (!this.customView?.handleInput) throw new Error("No custom UI is open");
+		if (data.length === 0 || data.length > 8000) throw new Error("Invalid key");
+		this.customView.handleInput(data);
+		this.emitCustom(true);
+	}
+
+	private clearCustom() {
+		if (!this.customView && !this.customTimer) return;
+		this.customView = undefined;
+		clearInterval(this.customTimer);
+		this.customTimer = undefined;
+		this.emitCustom(true);
+	}
+
+	private emitCustom(force = false) {
+		const snap = this.customSnapshot();
+		const frame = JSON.stringify(snap);
+		if (!force && frame === this.lastCustom) return;
+		this.lastCustom = frame;
+		this.onChange({ type: "custom-ui", ...snap });
+	}
+
 	private emitChrome(onlyIfChanged = false) {
 		const chrome = this.chrome();
 		const frame = JSON.stringify(chrome);
@@ -886,6 +1031,7 @@ class UIMirror {
 
 	dispose() {
 		clearInterval(this.componentTimer);
+		this.clearCustom();
 		for (const dialog of this.dialogs.values()) dialog.answer(undefined);
 	}
 }
@@ -1233,6 +1379,20 @@ export default function (pi: ExtensionAPI) {
 			host.topmostHwnd = enabled ? hwnd : undefined;
 			return sendJson(res, 200, { on: enabled });
 		}
+		if (path === "/api/custom-key" && req.method === "POST") {
+			const body = await readJson<{ data?: string }>(req);
+			requireMirror().sendCustomKey(typeof body.data === "string" ? body.data : "");
+			return sendJson(res, 200, {});
+		}
+		if (path === "/api/focus-window" && req.method === "POST") {
+			if (process.platform !== "win32") return sendJson(res, 200, { ok: false });
+			const body = await readJson<{ title?: string; host?: string }>(req);
+			const title = typeof body.title === "string" ? body.title.trim() : "";
+			if (!title || title.length > 500) return sendJson(res, 400, { error: "Missing window title" });
+			const pageHost = typeof body.host === "string" && /^[a-z0-9.:-]+:\d+$/i.test(body.host) ? body.host : "";
+			const hwnd = await focusPageWindow(title, pageHost);
+			return sendJson(res, 200, { ok: hwnd.length > 0 });
+		}
 
 		const current = requireCtx();
 		if (req.method === "POST") {
@@ -1265,7 +1425,11 @@ export default function (pi: ExtensionAPI) {
 			case "/api/state":
 				return sendJson(res, 200, getState(current));
 			case "/api/ui":
-				return sendJson(res, 200, { chrome: requireMirror().chrome(), dialogs: requireMirror().dialogList() });
+				return sendJson(res, 200, {
+				chrome: requireMirror().chrome(),
+				dialogs: requireMirror().dialogList(),
+				custom: requireMirror().customSnapshot(),
+			});
 			case "/api/thread":
 				return sendJson(res, 200, getThread(current));
 			case "/api/tree":
@@ -1330,6 +1494,7 @@ export default function (pi: ExtensionAPI) {
 		queue.steering.length = 0;
 		queue.followUp.length = 0;
 		host.handler = handle;
+		ensureFocusHelper();
 		// /reload may have changed the page files too: tell open pages to reload themselves.
 		broadcast({ type: "session", reload: event.reason === "reload" });
 	});

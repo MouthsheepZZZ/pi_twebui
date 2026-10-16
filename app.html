@@ -223,13 +223,24 @@
   .complete .opt .s { margin-left: auto; color: var(--muted); font-size: 11px; flex: none; }
 
   /* ---------- Menus and dialogs ---------- */
+  /* show(), not showModal(): a modal dialog in a chrome --app window keeps the keyboard
+     after it closes, so later keystrokes never reach the page until the next click. */
   dialog { border: 0; padding: 0; background: transparent; color: var(--text); }
-  dialog::backdrop { background: rgba(0,0,0,.6); }
-  #zoom { max-width: 94vw; max-height: 94vh; }
-  #zoom::backdrop { background: rgba(0,0,0,.8); }
+  dialog[open] {
+    position: fixed; inset: 0; z-index: 50; box-sizing: border-box; width: 100%; height: 100%;
+    max-width: none; max-height: none; margin: 0; padding: 12vh 16px 16px;
+    display: flex; justify-content: center; align-items: flex-start; background: rgba(0,0,0,.6);
+  }
+  #zoom[open] { align-items: center; padding: 16px; background: rgba(0,0,0,.8); }
+  .custom-ui {
+    width: min(820px, 100%); max-height: 76vh; overflow: auto; padding: 16px 18px 12px;
+    border-radius: 16px; background: var(--surface); border: 1px solid var(--border-strong);
+    box-shadow: 0 16px 48px rgba(0,0,0,.45);
+  }
+  .custom-ui pre { margin: 0; white-space: pre; font: 13px/1.45 var(--mono); color: var(--text); }
+  .custom-ui .hint { margin-top: 10px; color: var(--muted); font-size: 12px; }
   #zoom img { display: block; max-width: 92vw; max-height: 92vh; border-radius: 10px; }
-  #modal { width: min(520px, 92vw); }
-  .modal-box { padding: 20px; border-radius: 16px; background: var(--surface); border: 1px solid var(--border-strong); }
+  .modal-box { width: min(520px, 100%); padding: 20px; border-radius: 16px; background: var(--surface); border: 1px solid var(--border-strong); }
   .modal-box h3 { margin: 0 0 8px; font-size: 16px; }
   .modal-box .msg { color: var(--text-2); font-size: 13.5px; white-space: pre-wrap; margin-bottom: 12px; }
   .modal-box textarea {
@@ -240,8 +251,7 @@
   .btn.primary { background: var(--text); color: var(--bg); border-color: var(--text); }
   .btn.danger { background: var(--danger); color: #fff; border-color: var(--danger); }
   /* Selector overlay for /model, /resume, /tree, /fork, /thinking, like Pi's terminal selectors */
-  #picker { width: min(680px, 94vw); margin-top: 12vh; }
-  .picker { display: flex; flex-direction: column; max-height: 70vh; border-radius: 16px; background: var(--surface); border: 1px solid var(--border-strong); box-shadow: 0 16px 48px rgba(0,0,0,.45); }
+  .picker { display: flex; flex-direction: column; width: min(680px, 100%); max-height: 70vh; border-radius: 16px; background: var(--surface); border: 1px solid var(--border-strong); box-shadow: 0 16px 48px rgba(0,0,0,.45); }
   .picker-title { flex: none; padding: 16px 18px 0; font-size: 13px; color: var(--muted); }
   .picker input {
     flex: none; margin: 12px 14px 8px; height: 44px; padding: 0 16px; border: 1px solid var(--border-strong); border-radius: 12px;
@@ -305,6 +315,7 @@
 <dialog id="zoom"><img id="zoom-img" alt=""></dialog>
 <dialog id="modal"><form class="modal-box" id="modal-form" method="dialog"></form></dialog>
 <dialog id="picker"><div class="picker"><div class="picker-title" id="picker-title"></div><input id="picker-filter" spellcheck="false"><div class="picker-list" id="picker-list"></div><div class="picker-hint" id="picker-hint"></div></div></dialog>
+<dialog id="custom"><div class="custom-ui"><pre class="ansi" id="custom-body"></pre><div class="hint">↑↓ move · Enter select · Esc back · same as the terminal</div></div></dialog>
 
 <script src="/vendor/markdown-it.js"></script>
 <script src="/vendor/footnote.js"></script>
@@ -327,14 +338,43 @@ const DRAFT_KEY = "pi-compose-draft";
 const TOPMOST_KEY = "pi-twebui-topmost";
 const TOKEN = new URLSearchParams(location.search).get("token");
 
-// A closed overlay must not leave focus on the page body. Wait a frame so a dialog
-// that opens immediately afterwards keeps the focus it just took.
-function focusComposer() {
-  requestAnimationFrame(() => {
-    if (document.querySelector("dialog[open]") || $("ext-dialogs").children.length) return;
-    input.focus();
-  });
+const overlayOpen = () => document.querySelector("dialog[open]") || $("ext-dialogs").children.length;
+
+function openOverlay(dialog) {
+  if (!dialog.open) dialog.show();
 }
+
+let focusGen = 0;
+
+function focusComposer() {
+  if (overlayOpen()) return;
+  const active = document.activeElement;
+  if (active instanceof HTMLElement && active !== input && active.closest("dialog, #ext-dialogs")) active.blur();
+  window.focus();
+  input.focus();
+  // element.focus() cannot pull keys back when the terminal took the OS foreground
+  // (model changes redraw the TUI). The host puts this Chrome window in front again.
+  const gen = ++focusGen;
+  api("/api/focus-window", { title: document.title, host: location.host })
+    .then(() => {
+      if (gen !== focusGen || overlayOpen() || document.activeElement === input) return;
+      input.focus();
+    })
+    .catch(() => {});
+}
+
+// show() does not close on Esc the way showModal() did. Close it here, before the
+// page-level handler can treat Esc as an interrupt. The MCP window is the terminal's
+// own component, so Esc is forwarded to it instead of closed from the page.
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || e.isComposing) return;
+  const dialog = document.querySelector("dialog[open]");
+  if (!dialog || dialog.id === "custom") return;
+  e.preventDefault();
+  e.stopPropagation();
+  if (dialog.id === "modal") dialog.returnValue = "";
+  dialog.close();
+}, true);
 
 
 // Pasted images live as temp files referenced by path in the text; this keeps their previews while the path is in the text.
@@ -357,6 +397,9 @@ async function action(body, okMessage) {
   try {
     const result = await api("/api/action", body);
     if (okMessage) toast(okMessage);
+    // setModel redraws the terminal after the picker has already closed, which is when
+    // the console takes the keyboard. Claim it back only once that redraw has finished.
+    focusComposer();
     return result;
   } catch (error) {
     toast(error.message, true);
@@ -366,7 +409,7 @@ async function action(body, okMessage) {
 
 function zoom(src) {
   $("zoom-img").src = src;
-  $("zoom").showModal();
+  openOverlay($("zoom"));
 }
 $("zoom").onclick = () => $("zoom").close();
 $("zoom").onclose = () => focusComposer();
@@ -391,6 +434,7 @@ function pick({ title, items, selected = 0, placeholder = "Type to filter", hint
     const finish = (value) => {
       if (done) return;
       done = true;
+      if (document.activeElement?.closest?.("dialog")) document.activeElement.blur();
       if (dialog.open) dialog.close();
       focusComposer();
       resolve(value);
@@ -421,6 +465,9 @@ function pick({ title, items, selected = 0, placeholder = "Type to filter", hint
         row.querySelector(".label").textContent = it.label;
         row.querySelector(".detail").textContent = it.detail ?? "";
         row.onmousemove = () => { if (index !== i) { index = i; highlight(); } };
+        // Keep the caret in the filter. A mousedown on this row would otherwise move
+        // focus to the page, and closing the dialog would leave it there.
+        row.onmousedown = (e) => e.preventDefault();
         row.onclick = () => finish(it.value);
         list.appendChild(row);
         rows.push(row);
@@ -455,7 +502,7 @@ function pick({ title, items, selected = 0, placeholder = "Type to filter", hint
     };
     dialog.onclick = (e) => { if (e.target === dialog) finish(undefined); };
     dialog.onclose = () => finish(undefined);
-    dialog.showModal();
+    openOverlay(dialog);
     draw();
     filter.focus();
   });
@@ -477,9 +524,12 @@ function modal({ title, message = "", input: withInput = false, value = "", plac
       if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); form.querySelector('[value="ok"]').click(); }
     };
   }
+  form.querySelectorAll("button").forEach((button) => {
+    button.onmousedown = (e) => e.preventDefault();
+  });
   const dialog = $("modal");
   dialog.returnValue = "";
-  dialog.showModal();
+  openOverlay(dialog);
   if (field) { field.focus(); field.select(); }
   return new Promise((resolve) => {
     dialog.onclose = () => {
@@ -1639,6 +1689,7 @@ function buildDialog(d) {
     const b = document.createElement("button");
     b.className = `btn ${cls}`;
     b.textContent = label;
+    b.onmousedown = (e) => e.preventDefault();
     b.onclick = onClick;
     row.appendChild(b);
   };
@@ -1649,6 +1700,7 @@ function buildDialog(d) {
     choices.forEach((label, i) => {
       const b = document.createElement("button");
       b.textContent = label;
+      b.onmousedown = (e) => e.preventDefault();
       b.onclick = () => send(d.kind === "select" ? label : i === 0);
       opts.appendChild(b);
     });
@@ -1699,6 +1751,57 @@ function renderDialogs() {
   if (hadDialog && box.children.length === 0) focusComposer();
 }
 
+let customOpen = false;
+function renderCustom(view) {
+  const dialog = $("custom");
+  const open = !!view?.open;
+  if (!open) {
+    if (dialog.open) dialog.close();
+    if (customOpen) focusComposer();
+    customOpen = false;
+    return;
+  }
+  $("custom-body").innerHTML = (view.lines ?? []).map(ansiHtml).join("\n");
+  const wasOpen = dialog.open;
+  openOverlay(dialog);
+  customOpen = true;
+  if (!wasOpen) api("/api/focus-window", { title: document.title, host: location.host }).catch(() => {});
+}
+
+function terminalKey(e) {
+  if (e.isComposing || e.metaKey) return null;
+  if (e.altKey && !e.ctrlKey && e.key.length === 1) return `\x1b${e.key}`;
+  const named = {
+    Escape: "\x1b", Enter: "\r", Backspace: "\x7f",
+    Tab: e.shiftKey ? "\x1b[Z" : "\t",
+    ArrowUp: "\x1b[A", ArrowDown: "\x1b[B", ArrowRight: "\x1b[C", ArrowLeft: "\x1b[D",
+    Home: "\x1b[H", End: "\x1b[F", PageUp: "\x1b[5~", PageDown: "\x1b[6~", Delete: "\x1b[3~",
+  };
+  if (named[e.key] && !e.ctrlKey && !e.altKey) return named[e.key];
+  if (e.ctrlKey && !e.altKey && e.key.length === 1) {
+    const code = e.key.toLowerCase().charCodeAt(0);
+    if (code >= 97 && code <= 122) return String.fromCharCode(code & 31);
+  }
+  if (!e.ctrlKey && !e.altKey && e.key.length === 1) return e.key;
+  return null;
+}
+
+document.addEventListener("keydown", (e) => {
+  if (!$("custom").open) return;
+  const data = terminalKey(e);
+  if (data == null) return;
+  e.preventDefault();
+  e.stopPropagation();
+  api("/api/custom-key", { data }).catch((err) => toast(err.message, true));
+}, true);
+document.addEventListener("paste", (e) => {
+  if (!$("custom").open) return;
+  const text = e.clipboardData?.getData("text") ?? "";
+  if (!text) return;
+  e.preventDefault();
+  api("/api/custom-key", { data: `\x1b[200~${text}\x1b[201~` }).catch((err) => toast(err.message, true));
+});
+
 async function loadUI() {
   const hadDialog = $("ext-dialogs").children.length > 0;
   const ui = await api("/api/ui");
@@ -1707,7 +1810,8 @@ async function loadUI() {
   $("ext-dialogs").innerHTML = "";
   renderChrome();
   renderDialogs();
-  if (hadDialog && !$("ext-dialogs").children.length) focusComposer();
+  renderCustom(ui.custom);
+  if (hadDialog && !$("ext-dialogs").children.length && !$("custom").open) focusComposer();
 }
 
 /* ---------- Live connection ---------- */
@@ -1792,6 +1896,9 @@ function connect() {
       case "dialogs":
         dialogs = ev.dialogs;
         renderDialogs();
+        break;
+      case "custom-ui":
+        renderCustom(ev);
         break;
       case "notify":
         toast(ev.message.replace(/\x1b\[[0-9;]*m/g, ""), ev.level === "error");
