@@ -60,7 +60,7 @@ public static class PiTopmost {
     if (Match(fg, title) || HostHit(fg, pageHost)) return fg.ToInt64();
     if (saved != 0) {
       var h = new IntPtr(saved);
-      if (IsWindow(h) && (Match(h, title) || (Chrome(h) && IsWindowVisible(h) && Text(h, false).Contains("Pi TWebui")))) return h.ToInt64();
+      if (IsWindow(h) && Chrome(h) && IsWindowVisible(h)) return h.ToInt64();
     }
     long only = 0;
     int count = 0;

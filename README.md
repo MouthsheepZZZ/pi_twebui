@@ -37,19 +37,19 @@ pi --extension /path/to/pi-twebui
 - 页脚显示工作目录、分支、用量、上下文和模型，和终端页脚一致。
 - Windows 上，标题栏左侧的 Pin 可以把这个窗口保持在最前。
 - `/reload` 会重载终端里的扩展，并刷新已经打开的页面。
-- `/mcp` 在页面上打开和终端同一套 MCP 窗口。方向键、回车和 Esc 转给终端里的那个界面，登录时可以粘贴回调地址。
+- `/mcp` 和 `/settings` 这类界面只在终端里完成。在页面里输入时，只会提示回到终端，不会弹窗，也不会切换窗口焦点。
 
 输入框旁只有发送按钮。Pi 正在运行时，回车会把消息作为 steer 送进当前回合。
 
 页面里的内置命令：`/new`、`/clone`、`/compact`、`/model`、`/thinking`、`/name`、`/session`、`/tree`、`/fork`、`/resume`、`/copy`、`/hotkeys`、`/reload`、`/quit`。
 
-这些命令的界面只在终端里：`/settings`、`/scoped-models`、`/login`、`/logout`、`/export`、`/import`、`/share`、`/bug`、`/changelog`、`/trust`。`!` 开头的 shell 模式也只在终端里。
+这些命令的界面只在终端里：`/mcp`、`/settings`、`/scoped-models`、`/login`、`/logout`、`/export`、`/import`、`/share`、`/bug`、`/changelog`、`/trust`。`!` 开头的 shell 模式也只在终端里。
 
 ## 限制
 
 - 图片路径只在本机有效。Pi 和浏览器需要在同一台机器上。
 - 已排队的消息只能在终端里恢复到编辑器。
 - 浏览器可能先截获自己的保留快捷键。`chrome --app` 窗口没有地址栏，因此 `Ctrl+L` 可以打开模型选择。
-- 多行编辑对话框只能在终端里完成。页面上的 Esc 不会关闭扩展弹出的选择框，也不会在对话框还开着时打断 Pi。`/mcp` 的 Esc 会退回上一级，和终端一样。
+- 多行编辑对话框只能在终端里完成。页面上的 Esc 不会关闭扩展弹出的选择框，也不会在对话框还开着时打断 Pi。
 - 页面通过包装终端的 `ctx.ui` 来同步状态。这不是 Pi 的公开 RPC。Pi 升级后如果内部界面变了，页面上对应的状态可能停止更新，终端本身不受影响。
 - 刷新页面会保留输入框草稿，但会丢掉工具展开状态、思考块的显示选择和图片放大。

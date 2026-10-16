@@ -315,7 +315,7 @@
 <dialog id="zoom"><img id="zoom-img" alt=""></dialog>
 <dialog id="modal"><form class="modal-box" id="modal-form" method="dialog"></form></dialog>
 <dialog id="picker"><div class="picker"><div class="picker-title" id="picker-title"></div><input id="picker-filter" spellcheck="false"><div class="picker-list" id="picker-list"></div><div class="picker-hint" id="picker-hint"></div></div></dialog>
-<dialog id="custom"><div class="custom-ui"><pre class="ansi" id="custom-body"></pre><div class="hint">↑↓ move · Enter select · Esc back · same as the terminal</div></div></dialog>
+<dialog id="custom"><div class="custom-ui"><pre class="ansi" id="custom-body"></pre><div class="hint">The terminal has the keyboard. ↑↓ move · Enter select · Esc back</div></div></dialog>
 
 <script src="/vendor/markdown-it.js"></script>
 <script src="/vendor/footnote.js"></script>
@@ -364,8 +364,8 @@ function focusComposer() {
 }
 
 // show() does not close on Esc the way showModal() did. Close it here, before the
-// page-level handler can treat Esc as an interrupt. The MCP window is the terminal's
-// own component, so Esc is forwarded to it instead of closed from the page.
+// page-level handler can treat Esc as an interrupt. A terminal screen keeps Esc so
+// it can be forwarded if this window still has the keyboard.
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape" || e.isComposing) return;
   const dialog = document.querySelector("dialog[open]");
@@ -903,10 +903,13 @@ function applyTheme(theme) {
   }
 }
 
+function conversationTitle() {
+  return (state.conversationTitle || state.sessionName || "").replace(/\s+/g, " ").trim();
+}
+
 function pageTitle() {
   if (chrome.title) return chrome.title;
-  if (state.sessionName) return `${state.sessionName} · Pi TWebui`;
-  return "Pi TWebui";
+  return conversationTitle() || "Pi TWebui";
 }
 
 function renderPin() {
@@ -941,7 +944,9 @@ function renderState() {
   if (!state) return;
   applyTheme(state.theme);
   $("dot").className = "dot" + (state.idle ? "" : " busy");
-  $("title").textContent = state.sessionName || "Untitled session";
+  const title = conversationTitle();
+  $("title").textContent = title || "Untitled session";
+  $("title").title = title;
   updateComposerBorder();
   document.title = pageTitle();
   // Same priority as Pi's status row: compaction / branch summary replace the working indicator.
@@ -1272,7 +1277,7 @@ const BUILTINS = [
   { name: "quit", description: "Quit Pi", run: () => action({ type: "quit" }) },
 ];
 // Built-ins with terminal-only interfaces; the page points to the terminal instead.
-const TERMINAL_ONLY = ["settings", "scoped-models", "login", "logout", "export", "import", "share", "bug", "changelog", "trust"];
+const TERMINAL_ONLY = ["mcp", "settings", "scoped-models", "login", "logout", "export", "import", "share", "bug", "changelog", "trust"];
 
 async function loadCommands() {
   const ext = await api("/api/commands");
@@ -1280,7 +1285,7 @@ async function loadCommands() {
   commands = [
     ...BUILTINS.map((c) => ({ name: c.name, args: c.args, description: c.description, source: "built-in" })),
     ...TERMINAL_ONLY.map((name) => ({ name, description: "Terminal only", source: "terminal" })),
-    ...ext.map((c) => ({ name: c.name, description: c.description, source: sourceLabel[c.source] ?? c.source })),
+    ...ext.filter((c) => !TERMINAL_ONLY.includes(c.name)).map((c) => ({ name: c.name, description: c.description, source: sourceLabel[c.source] ?? c.source })),
   ];
 }
 /* ---------- Autocomplete ---------- */
@@ -1751,21 +1756,9 @@ function renderDialogs() {
   if (hadDialog && box.children.length === 0) focusComposer();
 }
 
-let customOpen = false;
-function renderCustom(view) {
+function renderCustom() {
   const dialog = $("custom");
-  const open = !!view?.open;
-  if (!open) {
-    if (dialog.open) dialog.close();
-    if (customOpen) focusComposer();
-    customOpen = false;
-    return;
-  }
-  $("custom-body").innerHTML = (view.lines ?? []).map(ansiHtml).join("\n");
-  const wasOpen = dialog.open;
-  openOverlay(dialog);
-  customOpen = true;
-  if (!wasOpen) api("/api/focus-window", { title: document.title, host: location.host }).catch(() => {});
+  if (dialog.open) dialog.close();
 }
 
 function terminalKey(e) {

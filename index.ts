@@ -95,6 +95,7 @@ interface Host {
 	topmostHwnd?: string;
 	// Last Chrome window we put in the foreground, and the helper that does it.
 	focusHwnd?: string;
+	focusScriptMtime?: number;
 	focusHelper?: ChildProcess;
 	focusStdout?: string;
 	focusWaiters?: Array<{ settled?: boolean; resolve: (hwnd: string) => void }>;
@@ -580,16 +581,25 @@ function applyWindowTopmost(title: string, enabled: boolean, pageHost: string, s
 // Listeners stay on the process across /reload; the host object is process-wide.
 function ensureFocusHelper() {
 	if (process.platform !== "win32") return;
+	let scriptMtime = 0;
+	try {
+		scriptMtime = statSync(join(ROOT, "focus-window.ps1")).mtimeMs;
+	} catch {
+		scriptMtime = 0;
+	}
 	const current = host.focusHelper;
-	if (current && current.exitCode === null && !current.killed) return;
+	const alive = !!current && current.exitCode === null && !current.killed;
+	if (alive && host.focusScriptMtime === scriptMtime) return;
 	const child = spawn(
 		"powershell.exe",
 		["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", join(ROOT, "focus-window.ps1")],
 		{ windowsHide: true, stdio: ["pipe", "pipe", "pipe"] },
 	);
+	host.focusScriptMtime = scriptMtime;
 	host.focusHelper = child;
 	host.focusStdout = "";
 	host.focusWaiters = [];
+	if (alive) current?.kill();
 	child.stdout?.setEncoding("utf8");
 	child.stdout?.on("data", (chunk: string) => {
 		if (host.focusHelper !== child) return;
@@ -619,7 +629,7 @@ function ensureFocusHelper() {
 	});
 }
 
-function focusPageWindow(title: string, pageHost: string): Promise<string> {
+function focusRequest(payload: Record<string, unknown>): Promise<string> {
 	if (process.platform !== "win32") return Promise.resolve("");
 	ensureFocusHelper();
 	const child = host.focusHelper;
@@ -640,14 +650,19 @@ function focusPageWindow(title: string, pageHost: string): Promise<string> {
 			resolve("");
 		}, 4000);
 		waiters.push(waiter);
-		child.stdin.write(
-			`${JSON.stringify({
-				title: Buffer.from(title, "utf8").toString("base64"),
-				host: pageHost,
-				hwnd: host.focusHwnd ?? host.topmostHwnd ?? "",
-			})}\n`,
-		);
+		child.stdin.write(`${JSON.stringify(payload)}\n`);
 	});
+}
+
+function focusPageWindow(title: string, pageHost: string): Promise<string> {
+	return focusRequest(
+		{
+			target: "page",
+			title: Buffer.from(title, "utf8").toString("base64"),
+			host: pageHost,
+			hwnd: host.focusHwnd ?? host.topmostHwnd ?? "",
+		},
+	);
 }
 
 async function readJson<T>(req: IncomingMessage): Promise<T> {
@@ -872,8 +887,8 @@ class UIMirror {
 		// Pi's terminal editor dialog cannot be closed from outside, so the page only shows it.
 		target.editor = (title: string, prefill?: string) =>
 			this.track({ kind: "editor", title, prefill: prefill ?? "" }, original.editor(title, prefill));
-		// /mcp and other terminal screens. The terminal still owns the component; the page
-		// renders the same instance and forwards keys into it. Nothing is added to the prompt.
+		// /mcp and other terminal screens. The terminal owns the component. The page mirrors
+		// it and forwards keys only while this window still has the keyboard. Nothing is added to the prompt.
 		target.custom = ((factory, options) => {
 			const wrapped: typeof factory = (tui, theme, keybindings, done) => {
 				const created = factory(tui, theme, keybindings, (result) => {
@@ -1156,6 +1171,21 @@ export default function (pi: ExtensionAPI) {
 		};
 	}
 
+	// Same title Pi shows for a session: the explicit name, otherwise the first user message.
+	function conversationTitle(current: ExtensionContext): string {
+		const named = pi.getSessionName()?.replace(/\s+/g, " ").trim();
+		if (named) return named.slice(0, 120);
+		for (const raw of current.sessionManager.getBranch()) {
+			const entry = raw as unknown as LooseEntry;
+			if (entry.type !== "message" || entry.message?.role !== "user") continue;
+			const parts = partsOf(entry.message);
+			const text = textOf(parts).replace(/\s+/g, " ").trim();
+			if (text) return text.slice(0, 120);
+			if (parts.some((part) => part.type === "image")) return "(image)";
+		}
+		return "";
+	}
+
 	function getState(current: ExtensionContext) {
 		const { totals, cacheHitRate } = usageTotals(current);
 		const model = current.model;
@@ -1165,6 +1195,7 @@ export default function (pi: ExtensionAPI) {
 			cwd: current.cwd,
 			cwdDisplay: homeRelative(current.cwd),
 			sessionName: pi.getSessionName() ?? "",
+			conversationTitle: conversationTitle(current),
 			sessionFile: current.sessionManager.getSessionFile() ?? "",
 			sessionId: current.sessionManager.getSessionId(),
 			entries: current.sessionManager.getEntries().length,
@@ -1578,7 +1609,7 @@ export default function (pi: ExtensionAPI) {
 		broadcast({ type: "thread" });
 		pushState();
 	});
-	// Mirrored dialogs appear on the page directly; only custom() terminal UIs need a hint.
+	// Mirrored dialogs appear on the page directly. Custom screens stay in the terminal.
 	pi.on("ui_prompt_start", async (event) => {
 		if (event.kind === "custom") broadcast({ type: "ui-prompt", active: true });
 	});
